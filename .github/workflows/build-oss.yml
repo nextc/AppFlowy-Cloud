@@ -19,6 +19,8 @@ jobs:
             dockerfile: ./Dockerfile
           - image: appflowy-worker
             dockerfile: ./services/appflowy-worker/Dockerfile
+          - image: admin-frontend
+            dockerfile: ./admin_frontend/Dockerfile
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
