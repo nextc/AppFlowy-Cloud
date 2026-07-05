@@ -1,9 +1,12 @@
 name: build-oss-cloud-image
 
 on:
-  workflow_dispatch: {}
-  push:
-    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref (tag or branch) to build the OSS images from"
+        required: true
+        default: "0.9.64"
 
 permissions:
   contents: read
@@ -23,6 +26,8 @@ jobs:
             dockerfile: ./admin_frontend/Dockerfile
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - uses: docker/setup-buildx-action@v3
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -38,7 +43,6 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            ghcr.io/nextc/${{ matrix.image }}:latest
-            ghcr.io/nextc/${{ matrix.image }}:${{ github.sha }}
+            ghcr.io/nextc/${{ matrix.image }}:${{ inputs.ref }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
