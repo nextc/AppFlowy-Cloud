@@ -1,0 +1,109 @@
+# 02 — Railway Deployment
+
+Railway workspace **MGVLabs**, project **`appflowy`** (ID `788e3d6d-a6d2-48ee-bca4-ebe4aec01ef3`),
+env **production**. CLI account: `ops@mgvlabs.com`.
+
+## The public domain lives in exactly one place
+
+The **`Nginx`** service holds **`PUBLIC_HOST`** (host only, no scheme) = **`b.mgvlabs.com`**.
+Every other service references it as a Railway **reference variable** `${{Nginx.PUBLIC_HOST}}`, so the
+domain is defined once. Composed forms in use: `https://${{Nginx.PUBLIC_HOST}}`,
+`${{Nginx.PUBLIC_HOST}}/gotrue`, `wss://${{Nginx.PUBLIC_HOST}}/ws`.
+
+Vars that reference it:
+- **GoTrue:** `GOTRUE_SITE_URL`, `API_EXTERNAL_URL`, `GOTRUE_MAILER_EXTERNAL_HOSTS`
+- **AppFlowy-Cloud:** `APPFLOWY_CLOUD_BASE_URL`, `APPFLOWY_WEB_URL`, `APPFLOWY_BASE_URL`
+- **AppFlowy-Web:** `APPFLOWY_BASE_URL`, `APPFLOWY_GOTRUE_BASE_URL`, `APPFLOWY_WS_BASE_URL`
+- **admin-frontend:** `APPFLOWY_BASE_URL`, `APPFLOWY_ALLOWED_ORIGINS`
+- **MinIO:** `MINIO_BROWSER_REDIRECT_URL`
+
+> **To move the whole app to a new domain:** change `PUBLIC_HOST` once, then redeploy those 5 services.
+
+### Reference-var gotchas
+- `railway variables --set` **does** store references, but `railway variables --json/--kv`
+  **resolves** them on display — so to prove a value is a live reference, change `PUBLIC_HOST` and
+  observe, don't trust `--json`.
+- `RAILWAY_PUBLIC_DOMAIN` / `RAILWAY_SERVICE_NGINX_URL` are auto-injected but **locked to the
+  `.up.railway.app` domain** — they never reflect a custom domain. That's why we keep our own
+  `PUBLIC_HOST`.
+- Use `--skip-deploys` when setting vars to avoid deploy churn, then `railway redeploy` explicitly.
+
+## Custom domain
+
+`b.mgvlabs.com` is a custom domain on the `Nginx` service.
+
+- **Railway routes custom domains to target port `8080`**, but the Nginx `PORT=80` and its config
+  originally only had `listen 80` → a custom domain got `x-railway-fallback: true` 502
+  ("Application failed to respond"). **Fix: the nginx server block listens on both `80` and `8080`.**
+  (The auto `.up.railway.app` domain works on 80 via Railway magic networking; only the custom domain
+  needs 8080.)
+- `railway domain` **mutations** return `Unauthorized` for the CLI token (only reads work) — attach a
+  domain or change its target port in the dashboard, or hand the command to the user. Making nginx
+  listen on 8080 is the CLI-doable workaround for the port issue.
+- `board.mgvlabs.com` was **blocked** by a wildcard `*.mgvlabs.com` attached to the separate
+  `mgvlabs_web` project — Railway ties hostname ownership to a project, so free it there first. The
+  CLI returns a misleading `Unauthorized` for a domain claimed elsewhere.
+
+## The nginx config mechanism (NOT this repo's `nginx/nginx.conf`)
+
+The deployed `Nginx` service holds its config **base64-encoded in `NGINX_CONFIG_B64`**, with
+placeholders substituted at container start from Nginx-service env vars:
+`__GOTRUE_HOST__`, `__CLOUD_HOST__`, `__MINIO_HOST__`, `__WEB_HOST__`, `__RESOLVER__`.
+
+**To edit routing** (full detail + current routes in [04](04-nginx-and-client-patches.md)):
+
+```bash
+# 1. decode current value to a file (keep a backup!)
+#    working copies live in scratchpad: nginx_new4.conf (current), nginx_backup.conf (rollback)
+
+# 2. edit the .conf
+
+# 3. validate — substitute placeholders first (esp. __RESOLVER__ → 127.0.0.11, else nginx -t fails on the literal)
+sed -e 's/__RESOLVER__/127.0.0.11/g' -e 's/__GOTRUE_HOST__/gotrue.railway.internal/g' \
+    -e 's/__CLOUD_HOST__/appflowy-cloud.railway.internal/g' -e 's/__WEB_HOST__/appflowy-web.railway.internal/g' \
+    -e 's/__MINIO_HOST__/minio.railway.internal/g' nginx_new4.conf > /tmp/nginx_test.conf
+docker run --rm -v /tmp/nginx_test.conf:/etc/nginx/nginx.conf:ro nginx:1.27-alpine nginx -t
+
+# 4. re-encode and set
+B64=$(base64 < nginx_new4.conf | tr -d '\n')
+railway variables --service Nginx --set "NGINX_CONFIG_B64=$B64" --skip-deploys
+
+# 5. redeploy (briefly affects the whole site — keep the backup for rollback)
+railway redeploy --service Nginx -y
+```
+
+## Deploying a Node service (email-hook / provisioner / admin-ui)
+
+These are our own Node services, deployed from source in the scratchpad via `railway up`.
+
+> **Stray-project trap:** `railway up` from an **unlinked** directory creates a brand-new stray
+> Railway project. **Always link first:**
+> ```bash
+> cd <service-source-dir>
+> railway link -p 788e3d6d-a6d2-48ee-bca4-ebe4aec01ef3 -s <service-name>
+> railway up --detach
+> ```
+
+## Switching an image source
+
+```bash
+railway service source connect --image ghcr.io/nextc/appflowy-cloud:0.9.64 --service AppFlowy-Cloud
+railway redeploy --service AppFlowy-Cloud --from-source
+```
+
+The image tag can't be read back via the CLI (needs an API token, classifier-gated); `service source
+connect` is silent on success, so a clean redeploy / fresh migration is the proxy confirmation.
+
+## Deploy-order after a DB wipe
+
+GoTrue (recreate `auth` schema) → AppFlowy-Cloud (fresh migrate) → Worker → Web → admin-frontend.
+Then re-apply the `@mingle.com` trigger (it's wiped with the DB) and confirm the email-hook env.
+
+## Classifier-gated actions (hand to the user via `! <cmd>`)
+
+The Claude auto-mode safety classifier blocks these — expect to give the user the command to run:
+- Prod-DB **writes/deletes** via `railway ssh --service pgvector psql` (unless user-directed for that
+  exact target). Idempotent DDL run by our own services (e.g. the provisioner creating a table/trigger
+  via its own pg connection) is **not** gated.
+- `railway domain` mutations, GitHub `gh repo fork` / `git push`, `railway delete`.
+- Reading the Railway API token or materializing credentials to stdout.
