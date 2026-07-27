@@ -2,8 +2,8 @@
 
 The `Nginx` service is a reverse proxy **and** the place we patch the closed web SPA's behavior
 without rebuilding it. Config is stored base64 in `NGINX_CONFIG_B64` (edit procedure in
-[02](02-railway-deployment.md)). Working copies: scratchpad `nginx_new4.conf` (current),
-`nginx_backup.conf` (rollback).
+[02](02-railway-deployment.md)). A committed copy of the current live config lives at
+[`nginx.live.conf`](nginx.live.conf) (regenerate by decoding `NGINX_CONFIG_B64`).
 
 ## Routes
 
@@ -77,11 +77,33 @@ Behavior:
 - **Fails safe:** if the response shape ever differs, the retry simply never fires (no false reload)
   and the old manual-refresh workaround still applies. No reload loops.
 
-Both scripts live in the same `</head>` sub_filter replacement (`sub_filter_once on`).
+All three scripts live in the same `</head>` sub_filter replacement (`sub_filter_once on`).
+
+## Patch 4 — Owner-only delete-hider (role-aware)
+
+Injected as a **third** `<script>` in the same `</head>` sub_filter replacement. Hides delete menu
+items from non-Owner members; server enforces Owner-only deletion on REST endpoints; CRDT row/list
+deletions (which have no REST endpoint) are blocked client-side by this UI guardrail. See
+[06](06-known-issues-and-fixes.md).
+
+Behavior:
+- Reads the current user's **role** from `GET /api/workspace` response (field `role`, values
+  `Owner`/`Member`/`Guest`) using the token in `localStorage.token`, matched to the active workspace
+  ID (extracted from `/app/<wsId>` URL path).
+- If role != `Owner`, a `MutationObserver` watches the DOM and hides clickable `<div>` elements
+  inside popover menus whose text is one of: **Delete**, **Move to Trash**, **Delete permanently**,
+  **Delete view**.
+- **Fails open:** any error in the script (role fetch timeout, malformed response, localStorage miss)
+  silently stops the observer but never breaks the app — deletion UI remains visible on error, and the
+  server guard (enforce_role_strong) still prevents server deletes.
+- Paired with server-side `enforce_role_strong(AFRole::Owner)` on 4 delete endpoints
+  (`move_to_trash`, `delete_page_from_trash`, `delete_all_pages_from_trash`, `delete_collab`). CRDT
+  deletes (kanban row/list/field) have no server equivalent and are guarded by this client-side hide.
 
 ## Editing checklist
 
-1. Edit `nginx_new4.conf`. Keep JS in `sub_filter` values **single-quoted only** — a stray double
+1. Decode `NGINX_CONFIG_B64` to a working `.conf` (or start from committed [`nginx.live.conf`](nginx.live.conf))
+   and edit it. Keep JS in `sub_filter` values **single-quoted only** — a stray double
    quote breaks the nginx double-quoted string.
 2. Validate with `docker run nginx:1.27-alpine nginx -t` (substitute `__RESOLVER__` → `127.0.0.11`
    first). The `duplicate MIME type "text/html"` warning from `gzip_types` is harmless.

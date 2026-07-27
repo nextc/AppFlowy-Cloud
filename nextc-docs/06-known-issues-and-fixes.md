@@ -233,6 +233,96 @@ actor snapshots **only** if a websocket session is attached; cold HTTP writes ar
 
 ---
 
+## Large file uploads die with broken pipe (single-PUT ≥ ~10–20 MB)
+
+- **Symptom:** `PUT /api/file_storage/{ws}/v1/blob/{parent_dir}` fails with client-side broken pipe /
+  connection reset for bodies ≥ ~10–20 MB (observed 2026-07-18 during the kanban migration: every
+  video failed, a 8.4 MB PNG succeeded, a 12.9 MB PNG failed). No size check exists in the cloud's
+  storage layer — the connection is cut at the nginx/Railway edge (body-size limit).
+- **Fix:** use the multipart API — `POST /{ws}/create_upload` (client-chosen `file_id`, e.g.
+  content-hash + extension) → `PUT /{ws}/upload_part/{parent_dir}/{file_id}/{upload_id}/{n}` with
+  ≤ 8 MB parts (S3 minimum 5 MB per non-final part) → `PUT /{ws}/complete_upload` with the e_tags.
+  Retrieval URL is identical to the single-PUT path (`/v1/blob/{parent_dir}/{file_id}`).
+  Working implementation: `mgvlabs_kb/appflowy-migration/repair_uploads.py`.
+
+## Board shows every group under "Hidden Groups" and renders no columns
+
+- **Symptom:** a database view switched to Board layout renders an empty canvas — all groups sit in the
+  **Hidden Groups** rail with blank names and `0` counts, even though the rows exist and carry valid
+  select values, and `hide_ungrouped_column`/`collapse_hidden_groups` are both `false` with every group
+  entry `visible: true`.
+- **Root cause:** the group-column entries inside `views[*].groups[0].groups` were written as **`Y.Map`
+  shared types**. The deployed web build (`0.9.93`) reads each entry with a plain-object accessor, so
+  `visible` resolves to `undefined` → `!column.visible` is true → **every** group is classified hidden
+  (`useGetBoardHiddenGroup`). Native AppFlowy boards store these as **plain Any maps**
+  (`{"id":"JgyfLX","visible":true}`) inside the `Y.Array` — confirmed by diffing a server-created board
+  against a hand-built one; the entry container type was the *only* difference.
+- **Fix:** rewrite the inner array with plain objects (`arr.push(ids.map(id => ({id, visible: true})))`)
+  and POST as a `web-update` (`collab_type=1`). Script: `mgvlabs_kb/appflowy-migration/fix_groups.mjs`.
+- **General lesson:** when hand-authoring collab structures, **diff against a natively-created object**
+  — Yjs shared types (`Y.Map`/`Y.Array`) and plain `Any` values are both valid Yjs but are *not*
+  interchangeable to clients that read one shape.
+
+## Select-option names with leading/trailing whitespace can never be set via REST
+
+- **Symptom:** a row's SingleSelect/MultiSelect cell silently stays empty after `POST
+  .../database/{db}/row`, even though the value exactly matches an existing option name. The card then
+  has no status and lands nowhere on a grouped board.
+- **Root cause:** the cell writer (`cell_from_json_value`, collab-database `select_type_option.rs`)
+  runs each incoming value through **`str::trim`** before matching option names — so an option literally
+  named `"In Progress "` (trailing space) is unreachable: the trimmed input never equals the untrimmed
+  option name. No error is raised; the cell is just left empty.
+- **Fix:** write the option **id** straight into the row collab
+  (`cells[field_id] = {field_type, data: "<option_id>", …}`, `collab_type=4` web-update). Script:
+  `mgvlabs_kb/appflowy-migration/set_select_cell.mjs`. Better long-term: trim option names at creation.
+- **Note:** after such a repair, `GET .../row/detail` can keep returning the stale empty value for a
+  while (server-side row cache) even though the collab on disk and the web UI are both correct —
+  verify against the rendered board or a cold re-read, not an immediate REST read.
+- **Found:** 1 card of 517 during the Kan.bn migration; caught only by reconciling *rendered* column
+  counts against the source board, which is why that reconciliation is worth doing.
+
+## Owner-only delete guardrail — Members can edit but not delete
+
+- **Motivation:** workspace admin (Owner) wanted to restrict content deletion to Owners only; Members can edit pages/rows but not delete them. AppFlowy has only 3 fixed roles (Owner/Member/Guest) with no custom/manager tier without Rust enum changes.
+- **Architecture finding:** deleting kanban rows/lists is CRDT-only (no REST endpoint) — the server cannot gate it, only clients can. Server can gate page/collab deletes (REST endpoints). This is a **guardrail** (client UI + server REST), not tamper-proof.
+- **Implementation (2026-07-25):**
+  - **AppFlowy-Cloud**: `src/api/workspace.rs` — 4 endpoints changed to `enforce_role_strong(AFRole::Owner)`: move-to-trash, delete-page-from-trash, delete-all-pages-from-trash, delete_collab.
+  - **Web client** (`appflowyinc/appflowy_web:0.9.93`): delete menu items are **FULLY HIDDEN** for non-Owners in 9 sites: RowMenu, CardToolbar, DatabaseRowModal, OptionMenu (select-option/tag), ViewActions (database view tab), ColumnMenu (board group/column), PropertyMenu (grid field), app/header/MoreActionsContent.tsx (page delete), and fullcalendar EventPopoverContent. Gated via new `useCanDeleteContent()` hook + dispatch guards.
+  - **Desktop client** (AppFlowy Flutter fork): delete menu items fully hidden using existing `role.canDelete` getter. Board card delete keyboard shortcut is gated in `board_shortcut_container.dart` `_removeHandler` (returns unhandled for non-Owners). Grid has no delete-row keyboard shortcut.
+- **Verification:** `cargo check` clean (Docker); TypeScript `pnpm type-check` / `tsc` clean. Dart format parses; `flutter analyze` requires full codegen toolchain not available locally.
+- **Implementation level:** guardrail (bloc-event handlers themselves are not role-guarded, so deletion logic is gated at dispatch layer, not tamper-proof).
+- **Deployment attempt (2026-07-27/28): ROLLED BACK, then replaced with nginx guardrail.**
+  - **Initial plan:** Cloud `0.9.64-delete-guardrail` via CI (success). Web built from new fork `nextc/AppFlowy-Web` via new `build-oss-web.yml` (amd64, public GHCR).
+  - **Failure:** new web image **broke version-pairing** — built from `AppFlowy-Web:main` (~0.16.x, far ahead of cloud 0.9.64). Connected + joined workspace (cloud logs clean) but couldn't render the folder tree against the older cloud; sidebar/folder wouldn't load.
+  - **Rollback:** reconnected web to `appflowyinc/appflowy_web:0.9.93` (stock image, no custom build).
+  - **Final solution (live 2026-07-28):** **nginx-injected role-aware delete-hider** (Patch 4 in [04](04-nginx-and-client-patches.md)) on the stock `0.9.93` image. Same delete-item hiding as the custom build, but delivered as a `sub_filter` script instead of baked into a web rebuild. Server cloud guard (`0.9.64-delete-guardrail`) deployed and active.
+  - **Coverage:** server REST deletes (page/collab) blocked by cloud `enforce_role_strong`; kanban CRDT deletes (rows/lists/fields) blocked by nginx-injected UI guardrail on stock 0.9.93. **Lesson:** building custom web images from main breaks version-pairing; prefer nginx `sub_filter` for web-side changes on stock images.
+  - **Rollback (if needed):** cloud→`0.9.64-ws-text-echo`, web→`appflowyinc/appflowy_web:0.9.93`, nginx (Patch 4 already in stock config).
+  - **Desktop:** NOT deployed (separate binary distribution).
+
+---
+
+## New web build shows "connecting forever"
+
+- **Symptom:** after deploying a new AppFlowy-Web build, the SPA loads but "Connecting..." spinner never completes; network tab shows WebSocket never attempts to connect.
+- **Root cause:** pre-existing misconfigured env var `APPFLOWY_WS_BASE_URL=wss://b.mgvlabs.com/ws` (MISSING `/v2` suffix). Old web `0.9.93` read the correct fallback `AF_WS_V2_URL` when `APPFLOWY_WS_BASE_URL` was empty; a newer web build (~0.16+) prefers the `APPFLOWY_*` vars and surfaces the bad value. The entrypoint only falls back to `AF_WS_V2_URL` when the new-style var is absent.
+- **Fix:** set `APPFLOWY_WS_BASE_URL=wss://b.mgvlabs.com/ws/v2` on the AppFlowy-Web service env vars, then redeploy. The env var is injected into `index.html` as `window.__APP_CONFIG__` at container start (the stock `appflowyinc/appflowy_web:0.9.93` Dockerfile entrypoint `./docker-entrypoint.sh` does this).
+- **Verification:** DevTools→Network→WS tab shows websocket connection attempts to `/ws/v2`; app connects + loads sidebar.
+
+---
+
+## New web build: sidebar/folder won't load (version-skew)
+
+- **Symptom:** a fresh web image boots (200), connects to cloud (no errors in cloud logs), and the authorization endpoint fires, but the sidebar and folder tree never render — the page stays blank or shows only top chrome.
+- **Root cause:** building the web image from `AppFlowy-Web:main` is **far ahead of the deployed cloud**. Version mismatch on the collab format or the API surface means the web can join the workspace (auth passes) but can't deserialize or render the folder structure against the older cloud's data. Specific root: main web ~0.16+ uses a newer database collab schema / folder serialization that the cloud `0.9.64` → web `0.9.93` pair does not support.
+- **Why it happened:** testing a custom web rebuild to deploy the delete-guardrail (see entry above). Building from `main` is the default (`git clone …`), not from a release tag. No tagged releases exist for web `0.9.93` on GitHub (the Docker image exists; the source tag does not).
+- **Fix / rollback:** reconnect the web service to `appflowyinc/appflowy_web:0.9.93` (the stock image, not a custom build) and redeploy. If you must build a custom web image, git-tag it from the known-good release date, or patch `0.9.93` directly (avoiding main).
+- **Lesson:** never build a custom web image from `main` when the deployed cloud is several releases behind. The version-pairing rule (by release date, not number) applies to rebuilds too. **Prefer nginx `sub_filter` injection for web-side changes** (e.g., client-side UI hides, script injection) to avoid the need for custom web builds and version-skew risk.
+
+---
+
+---
+
 ## Deploy / tooling gotchas (quick list)
 
 - `railway up` from an **unlinked** dir creates a **stray project** — always `railway link -p … -s …`

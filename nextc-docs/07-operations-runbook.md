@@ -51,6 +51,28 @@ edit `scratchpad/nginx_new4.conf` → `docker … nginx -t` (substitute `__RESOL
    **Remember the version-pairing rule** ([01](01-architecture.md)) — bump gotrue/web to the
    **same-release-date** tags, not matching numbers. Don't bump one image casually.
 
+## Deploy a custom web image (advanced)
+
+**Avoid building custom web images when possible.** The default is to use a stock `appflowyinc/appflowy_web` image (e.g. `0.9.93`). Only build when a web-side code change is unavoidable (custom delete-hider, auth hook, etc.).
+
+### Why to avoid it
+
+- `appflowyinc/appflowy_web` has **no clean git tag** for released versions (the Docker image exists; the source tag does not) — you must guess the tag or build from a branch like `release/0.9.93` or `main`.
+- Building from `main` is **far ahead** of any deployed cloud (`~0.16+` vs `0.9.64`). Version-skew will break: web connects but can't render the folder tree or deserialize collab formats the older cloud doesn't support.
+- The stock image requires 3 env vars (`AF_BASE_URL`, `AF_GOTRUE_URL`, `AF_WS_V2_URL`); custom builds may not validate them at boot.
+
+### If you must build
+
+1. Create a fork (e.g. `nextc/AppFlowy-Web`) with a `build-oss-web.yml` workflow that mirrors `build-oss.yml` (checkout `inputs.ref`, build amd64, push to GHCR).
+2. **Git-tag the source branch** (or check it out by tag/release-date) to match the known-good pairing with your cloud. E.g. for cloud `0.9.64` (2025-08-04), web was released ~2025-08-18; tag or branch from that date, not `main`.
+3. Dispatch the workflow with `ref=<your-tag>` → `ghcr.io/nextc/appflowy_web:<your-tag>`.
+4. **Test the version-pairing** in a throwaway Railway project first — ensure sidebar/folder renders against your cloud version.
+5. If deploying a client-side UI change (e.g., delete-hider, button hiding), **consider nginx `sub_filter` injection instead** (see [04](04-nginx-and-client-patches.md)) — it avoids the rebuild + version-skew risk entirely.
+
+### Rollback
+
+Point the web service back to `appflowyinc/appflowy_web:0.9.93` (or whichever stock version was working) and redeploy.
+
 ## Switch the whole app to a new domain
 
 1. `railway variables --service Nginx --set "PUBLIC_HOST=<new-host>" --skip-deploys`

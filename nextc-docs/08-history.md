@@ -101,6 +101,75 @@ Chronological log reconstructed from all project conversations. Dates are when t
   logic in practice.
 - Updated the known-issues catalog with all three bug diagnoses + the latent finding.
 
+## Phase 7 — Kan.bn kanban → AppFlowy data migration (2026-07-18)
+
+- Migrated **all 17 live Kan.bn boards** (kb.mgvlabs.com) into the shared workspace as Grid pages
+  under a new **Kanban Boards** space, each formatted like the existing "Build List" grid (Name
+  primary / Status single-select from the board's lists / Done / Card Link URL / Attachments media /
+  Labels + Members + Due where used; card description + checklists + comments as row documents).
+- Fully API-driven with the owner's self-minted JWT: `POST page-view` (Grid), one Yjs `web-update`
+  per board (drop the 3 seeded rows, default "Type" field → "Status" with select options), then REST
+  `fields`/`row` inserts. `/ws/v2` keepalive held open throughout — required by the cold-actor
+  snapshot bug (see [06](06-known-issues-and-fixes.md)).
+- Attachments: single-PUT blob upload dies at the edge for ≥ ~10–20 MB bodies (broken pipe) → used
+  the multipart upload API (8 MB parts) in an idempotent reconcile pass that compares source files
+  vs row Media cells and patches DatabaseRow collabs (`collab_type=4`, root `data`→`data`→`cells`).
+- Verified end-state: **517/517 cards, 230/230 attachments** across all boards, byte-exact blob
+  round-trips, counts stable after full actor cool-down. Tooling + per-board view/db id map archived
+  at `mgvlabs_kb/appflowy-migration/` (outside this repo).
+- Operational notes: Kan.bn API returns 401s on request bursts (~90 s lockout; pace ~1 req/s);
+  Railway CLI project link is directory-scoped (user `!` commands need `cd` into this repo first).
+- **2026-07-20 follow-up:** all 17 pages converted Grid → **Board (kanban) layout** via Yjs
+  `web-update` on both collabs — DB view `layout` 0→1 + `layout_settings["1"]` + a `groups`
+  GroupSetting on the Status field, folder view `layout` 1→2 (the two layout enums differ:
+  DatabaseLayout Board=1 vs folder ViewLayout Board=2). Verified cold-persistent. The 3 boards
+  visible in the Kan.bn workspace listing but 404 on fetch (Core Project, Startup Project, Test —
+  trashed upstream) remain unmigratable via API.
+- **Board-render bug found by looking at the actual screen** (same day): the first flip wrote group
+  columns as `Y.Map`s, which the deployed web build can't read → all groups fell into "Hidden Groups"
+  and boards rendered blank. Diffing against a natively-created board showed entries must be **plain
+  objects**; fixed across all 17 boards (`fix_groups.mjs`) and verified visually + cold. Full write-up
+  in [06](06-known-issues-and-fixes.md).
+- **Final acceptance:** every board's *rendered* kanban columns were extracted from the live DOM and
+  reconciled against the source board — **17/17 boards, 517/517 cards in the correct columns**. That
+  pass caught one further defect: a card whose Kan.bn list was named `"In Progress "` (trailing space)
+  had an empty Status, because the REST cell writer trims input before matching option names. Repaired
+  by writing the option id into the row collab (`set_select_cell.mjs`); see [06](06-known-issues-and-fixes.md).
+- **Migration is ongoing, not one-off** — the team still works in the old Kanban. Tracked in
+  `mgvlabs_kb/appflowy-migration/MIGRATION-LOG.md` (per-board card/attachment counts, view/db ids,
+  round-2 recipe), with `check_new_cards.py` giving a read-only drift report (new / moved / gone
+  cards, new boards) that treats live AppFlowy as truth via each row's Kan.bn `Card Link` id.
+  Measured 2 days after round 1: **5 new + 15 moved cards**.
+- **Round 2 (2026-07-20, "new cards only")** — `add_new_cards.py --apply` added **+6 cards / +9
+  attachments** (Mingle2 1, QuestDay 2, TripFold 3) onto the existing databases without touching
+  existing rows, so AppFlowy-side Status edits survive. End state **523 cards / 239 attachments**;
+  `check_new_cards.py` reports `new=0, gone=0` on all 17 boards (card *sets* match Kan.bn exactly).
+  The 15 moved cards were deliberately left at their AppFlowy Status per the chosen policy.
+  Recurring trap confirmed again: **REST `row/detail` serves stale rows for minutes after a collab
+  write** (and the browser caches too) — verify against the rendered board or a raw collab read.
+
+## Phase 8 — Role-based access control: delete guardrail (2026-07-25/28)
+
+- User requirement: **Owner-only delete** — Members can edit but not delete documents or kanban lists.
+- Constraint: AppFlowy has only 3 roles (Owner/Member/Guest), no custom tier without Rust enum + migration + casbin changes.
+- Architecture: CRDT deletes (rows/lists) are client-only; REST deletes (pages/collabs) can be server-gated. This is a guardrail (UI + REST), not tamper-proof.
+- Implementation: Cloud `4 endpoints` → `enforce_role_strong(AFRole::Owner)`, web delete items FULLY HIDDEN in 9 sites (RowMenu, CardToolbar, DatabaseRowModal, OptionMenu, ViewActions, ColumnMenu, PropertyMenu, MoreActionsContent, EventPopoverContent), Flutter delete items fully hidden + board card delete keyboard shortcut gated in `board_shortcut_container.dart`. Verified builds (`cargo check` Docker / `tsc` clean; Flutter only `dart format`, no `flutter analyze`). Guardrail level: bloc-event handlers not role-guarded.
+
+### 2026-07-27/28 — Deployment saga
+
+- **Cloud image:** `ghcr.io/nextc/appflowy-cloud:0.9.64-delete-guardrail` built via GitHub CI (`build-oss.yml` on `nextc/AppFlowy-Cloud`). Railway `AppFlowy-Cloud` service reconnected → redeploy **SUCCESS**. Cloud REST deletes now blocked for non-Owners.
+- **Web image attempt (FAILED):** New fork `nextc/AppFlowy-Web` + `build-oss-web.yml`. Built `appflowy_web:0.9.93-delete-guardrail` from `AppFlowy-Web:main` (default branch). Deployed to Railway `AppFlowy-Web` service.
+  - **Problem:** web loads (200), connects to cloud (no errors), but sidebar/folder never render. Root cause: **building from `main` is ~0.16+ (several major versions ahead of cloud `0.9.64`)**. Version-skew on collab format / folder serialization breaks deserialization. No code issue; version mismatch.
+  - **Lesson:** never build custom web images from `main` when deployed cloud is multiple releases behind. The version-pairing rule applies to rebuilds too. No clean git tag exists for web `0.9.93` (Docker image exists; source tag doesn't). Rebuilding is dangerous.
+  - **ROLLBACK:** web service reconnected to `appflowyinc/appflowy_web:0.9.93` (stock image). Redeploy **SUCCESS**. Web functions normally.
+- **Final solution (2026-07-28):** Delivered the web-side delete-hider via **nginx `sub_filter` injection** (Patch 4, [04](04-nginx-and-client-patches.md)) instead of a custom web build. Same delete UI hide (role-aware MutationObserver), zero version-skew risk, no custom image needed. Updated nginx config → NGINX_CONFIG_B64 → redeploy. **All green:** web 200, sidebar loads, delete items hidden for non-Owners, server guards active.
+- **Final coverage (live 2026-07-28):** 
+  - **Server:** cloud `0.9.64-delete-guardrail` enforces `AFRole::Owner` on REST deletes (move-to-trash, delete-page, delete-all, delete-collab).
+  - **CRDT deletes (kanban rows/lists/fields):** no server endpoint exists; guarded by nginx-injected UI hider on stock web `0.9.93`.
+  - **Workspace `dc8cd0fa`:** Members: `bao.pham@mingle.com`, `thanh+1@mingle.com` (both can edit, not delete). Owner: `thanh@mingle.com` (full perms).
+  - **Desktop:** NOT deployed (separate binary distribution; would need custom Flutter build + real `flutter analyze` in full codegen toolchain).
+- **Outcome:** Guardrail is live and functional. Members can edit but cannot delete. Server guards prevent REST deletion; nginx guardrail prevents UI-triggered CRDT deletion. See [06](06-known-issues-and-fixes.md) for the full deployment log and rollback steps.
+
 ## Standing constraints carried throughout
 
 - No broad Railway↔GitHub access (only `nextc/AppFlowy-Cloud`).
