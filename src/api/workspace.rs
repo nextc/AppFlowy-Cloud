@@ -1590,6 +1590,11 @@ async fn move_page_to_trash_handler(
 ) -> Result<Json<AppResponse<()>>> {
   let uid = state.user_cache.get_user_uid(&user_uuid).await?;
   let (workspace_uuid, view_id) = path.into_inner();
+  // SECURITY: deleting content (move-to-trash) is Owner-only; Members have Write but must not delete.
+  state
+    .workspace_access_control
+    .enforce_role_strong(&uid, &workspace_uuid, AFRole::Owner)
+    .await?;
   let user = realtime_user_for_web_request(req.headers(), uid)?;
   move_page_to_trash(&state, user, workspace_uuid, &view_id).await?;
   Ok(Json(AppResponse::Ok()))
@@ -1652,9 +1657,10 @@ async fn delete_page_from_trash_handler(
     .await
     .map_err(AppResponseError::from)?;
   let (workspace_id, view_id) = path.into_inner();
+  // SECURITY: permanently deleting a trashed page is Owner-only; Members have Write but must not delete.
   state
     .workspace_access_control
-    .enforce_action(&uid, &workspace_id, Action::Write)
+    .enforce_role_strong(&uid, &workspace_id, AFRole::Owner)
     .await?;
   let user = realtime_user_for_web_request(req.headers(), uid)?;
   delete_trash(&state, user, workspace_id, &view_id).await?;
@@ -1674,9 +1680,10 @@ async fn delete_all_pages_from_trash_handler(
     .await
     .map_err(AppResponseError::from)?;
   let workspace_id = path.into_inner();
+  // SECURITY: emptying the trash deletes content permanently; Owner-only, not granted to Members.
   state
     .workspace_access_control
-    .enforce_action(&uid, &workspace_id, Action::Write)
+    .enforce_role_strong(&uid, &workspace_id, AFRole::Owner)
     .await?;
   let user = realtime_user_for_web_request(req.headers(), uid)?;
   delete_all_pages_from_trash(&state, user, workspace_id).await?;
@@ -2006,6 +2013,12 @@ async fn delete_collab_handler(
     .get_user_uid(&user_uuid)
     .await
     .map_err(AppResponseError::from)?;
+
+  // SECURITY: deleting a collab object is Owner-only; Members have Write but must not delete.
+  state
+    .workspace_access_control
+    .enforce_role_strong(&uid, &payload.workspace_id, AFRole::Owner)
+    .await?;
 
   state
     .collab_storage
