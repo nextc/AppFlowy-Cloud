@@ -100,6 +100,43 @@ Behavior:
   (`move_to_trash`, `delete_page_from_trash`, `delete_all_pages_from_trash`, `delete_collab`). CRDT
   deletes (kanban row/list/field) have no server equivalent and are guarded by this client-side hide.
 
+## Patch 5 — Card-detail hidden fields expanded by default (2026-09-03)
+
+The web 0.9.93 row-detail modal collapses hidden fields behind a "Show N hidden fields" toggle
+(`DatabaseRowProperties` inits `isFilterHidden` with `useState(true)`). Patch 5 flips that default to
+**expanded** by rewriting the served chunk in transit — board cards still hide those fields (that's
+the view's field-visibility settings, a separate mechanism).
+
+Two cooperating pieces:
+
+- **`location /static2/`** — serves the *entire JS module graph* under a new path prefix.
+  `rewrite ^/static2/(.*)$ /static/$1` to the web upstream, then two `sub_filter`s on
+  `application/javascript` (`sub_filter_once off`): `static/js/` → `static2/js/` (rewrites each
+  file's absolute vitePreload manifest string) and the behavior patch
+  `(true);const[activePropertyId` → `(false);const[activePropertyId` (that string is unique to the
+  `Database-*.js` chunk; a no-op elsewhere). ETag/Expires/Cache-Control stripped, `no-cache` added.
+- **`location /` HTML sub_filter** — `"/static/js/"` → `"/static2/js/"` (needs `sub_filter_once
+  off`; index.html has two script refs — the `</head>` injection is unaffected since it occurs once).
+- The older `location = /static/js/Database-BsewwjMk.js` block also patches the original URL for
+  stragglers whose cache expires.
+
+**Why the path prefix (learned the hard way):** the chunk URL carries a 30-day `max-age`, and hard
+reloads do NOT bypass the cache for *dynamically imported* chunks — patching the file in place never
+reaches browsers that had it cached. Renaming individual files (a `.v2` suffix) also fails: Vite
+chunks import **each other and the entry by original name**, so a partial rename splits the app into
+two module graphs and the modal renders from the stale cached one (observed live). Moving the whole
+graph to `/static2/` works because chunks cross-import *relatively* (`./chunk.js`) — every import
+resolves inside the new prefix automatically, and no `/static2/` URL exists in any browser cache, so
+the whole team picks the patch up on a normal reload.
+
+**Fail-safe / re-pin:** the behavior sub_filter is string-pinned to the 0.9.93 bundle. A web image
+bump renames the chunks; `/static2/` keeps serving the new graph unmodified (the patch string just
+stops matching) and stock collapsed behavior returns — re-find the unique
+`useState(true)`-anchor in the new `Database-*.js` and update the sub_filter.
+
+**Gotcha:** `useState$z(true)` itself can't be a sub_filter pattern — nginx parses `$z` as a
+variable. Anchor on an adjacent `$`-free unique string instead.
+
 ## Editing checklist
 
 1. Decode `NGINX_CONFIG_B64` to a working `.conf` (or start from committed [`nginx.live.conf`](nginx.live.conf))
