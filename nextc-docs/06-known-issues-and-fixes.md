@@ -339,14 +339,18 @@ actor snapshots **only** if a websocket session is attached; cold HTTP writes ar
   rewrites Patch 5 also relies on still serve the new bundle correctly and needed no changes.
 - **Open caveats (as of this deploy):**
   1. The write path (editing/moving cards) was **not** explicitly verified on this build — a manual
-     edit test on prod is still pending.
+     edit test on prod is still pending. *Partial positive evidence 2026-09-04:* a database-view
+     rename (REST page rename + Yjs `view.set(name)` via `useUpdateDatabaseView`) persisted
+     server-side across a fresh reload (see the "BoardTemplate tab" entry below). Card/cell edits
+     remain untested.
   2. This build's `vite.config.ts` loads React 18.2.0 / ReactDOM 18.2.0 from `cdn.jsdelivr.net` at
      runtime (build-time CDN externals) — a jsdelivr outage would break the app entirely.
   3. ~~In dev testing, a first-ever load with a cold IndexedDB briefly rendered rows with empty cells
      until row docs finished syncing (a reload fixed it).~~ **Hit prod at scale and FIXED same day —
      see the follow-up entry below ("Boards show 'Untitled' cards for minutes on first visit").**
-  4. Cosmetic-only: the BoardTemplate board's tab label renders as the underlying view's name ("Kid
-     Achievement") on this build.
+  4. ~~Cosmetic-only: the BoardTemplate board's tab label renders as the underlying view's name
+     ("Kid Achievement") on this build.~~ **Data fixed 2026-09-04** — root cause + the rename-modal
+     no-op bug it exposed are written up below ("BoardTemplate tab showed 'Kid Achievement'").
 - **Verification run:** `tsc` + `eslint` clean; manual in-browser check against production data via a
   dev proxy (deep-link cold load, Escape/backdrop close, Back/Forward, expand, board render).
 
@@ -378,6 +382,39 @@ actor snapshots **only** if a websocket session is attached; cold HTTP writes ar
 - **Note:** rows are seeded per page-view fetch (skipped when the database doc is already cached in
   IndexedDB) — the long-tail of never-opened rows on an already-cached database still hydrates via
   WS, which is acceptable since visible rows land in IndexedDB on first hydration.
+
+---
+
+## BoardTemplate tab showed "Kid Achievement" (compat build) — data FIXED, rename bug OPEN (2026-09-04)
+
+- **Symptom:** the BoardTemplate page (view `8354ba8a-6779-4596-a64a-85186b6f7ade`, Tips Sharing
+  space) showed "BoardTemplate" in the sidebar/breadcrumb/title but "Kid Achievement" as its single
+  database view tab. Renaming the tab to "BoardTemplate" via right-click → Rename appeared to do
+  nothing.
+- **Root cause (two names, and the tab prefers the hidden one):** a database page has **two name
+  records** — the folder/outline name (what the sidebar shows) and the view's own `name` inside the
+  database Yjs collab. The compat build renders the tab label Yjs-first:
+  `DatabaseTabItem.tsx:66` — `const name = yjsName || override || defaultName;` (upstream code at
+  the compat base `d0704de2`, not a fork change). This board's folder name was "BoardTemplate" but
+  its inner Yjs name was still "Kid Achievement" — the inner name is stamped at creation and page
+  renames don't touch it. Provenance of the stale name *(unverified)*: likely a duplicate of the
+  round-3-migrated "Kid Achievement" board — BoardTemplate is absent from the migration manifest and
+  the migration scripts never write database-view names.
+- **Why renaming didn't fix it — silent no-op bug (still OPEN in the fork):** `RenameModal.tsx`
+  guards `if (newValue === view.name) return;`, and `view.name` there comes from `DatabaseTabs`'
+  `renameView`, which prefers the **outline/folder** name. So the modal pre-fills "BoardTemplate",
+  saving "BoardTemplate" trips the "unchanged" guard, and the Yjs write in `useUpdateDatabaseView`
+  (`dispatch.ts` — REST page rename, then `view.set(YjsDatabaseKey.name, …)`) never runs. No error,
+  no toast. Any board whose two names diverge cannot be renamed to its folder name in one step.
+  **Code fix (not yet made):** make `renameView` in `DatabaseTabs.tsx` resolve the current name the
+  same way `DatabaseTabItem` renders it (Yjs-first); needs a web rebuild + redeploy.
+- **Data fix applied (prod, 2026-09-04):** renamed the tab twice in the web UI — to "TempName"
+  (different string, so the guard passes and both the folder name and the Yjs view name get
+  written), then back to "BoardTemplate". Verified after a fresh page reload: tab, title,
+  breadcrumb, and sidebar all show "BoardTemplate" — i.e. the write persisted server-side (partial
+  positive evidence for the open write-path caveat above; card edits still untested).
+- **Workaround for any future occurrence:** double-rename (temp name → intended name) from the tab's
+  right-click menu.
 
 ---
 
