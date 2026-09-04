@@ -100,7 +100,17 @@ Behavior:
   (`move_to_trash`, `delete_page_from_trash`, `delete_all_pages_from_trash`, `delete_collab`). CRDT
   deletes (kanban row/list/field) have no server equivalent and are guarded by this client-side hide.
 
-## Patch 5 — Card-detail hidden fields expanded by default (2026-09-03)
+## Patch 5 — Card-detail hidden fields expanded by default (2026-09-03) — **RETIRED (inert) 2026-09-04**
+
+> **Retired-in-code:** the 2026-09-04 web deploy (`ghcr.io/nextc/appflowy_web:compat-cloud-0.9.64`,
+> see [06](06-known-issues-and-fixes.md) and [08](08-history.md)) ships the same "expanded by
+> default" behavior natively — `DatabaseRowProperties.tsx` now inits `isFilterHidden` with
+> `useState(false)` directly (commit `ee87105f` in `nextc/AppFlowy-Web`). The sub_filter below is
+> **still present in `NGINX_CONFIG_B64`** but is now a no-op: its pinned match string
+> `(true);const[activePropertyId` is specific to the old 0.9.93 `Database-*.js` chunk and does not
+> appear in the new build's chunks, so it silently fails to match (fail-safe by design — see
+> "Fail-safe / re-pin" below). Safe to delete from the nginx config at leisure; left in place for
+> now since it's harmless and rollback to the stock 0.9.93 image would make it live again.
 
 The web 0.9.93 row-detail modal collapses hidden fields behind a "Show N hidden fields" toggle
 (`DatabaseRowProperties` inits `isFilterHidden` with `useState(true)`). Patch 5 flips that default to

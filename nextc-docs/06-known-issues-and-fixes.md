@@ -302,6 +302,85 @@ actor snapshots **only** if a websocket session is attached; cold HTTP writes ar
 
 ---
 
+## Custom web image deployed to prod: compat-cloud-0.9.64 (2026-09-04)
+
+- **What shipped:** AppFlowy-Web Railway service swapped from stock `appflowyinc/appflowy_web:0.9.93`
+  to self-built `ghcr.io/nextc/appflowy_web:compat-cloud-0.9.64`, via
+  `railway service source connect --image ghcr.io/nextc/appflowy_web:compat-cloud-0.9.64 --service
+  AppFlowy-Web` + `railway redeploy --service AppFlowy-Web --from-source -y` (prod deploys are
+  classifier-gated, so this was user-run). **Rollback:** point the service back to
+  `appflowyinc/appflowy_web:0.9.93`.
+- **Why a custom build at all — the compat branch:** see the entry above. `nextc/AppFlowy-Web` branch
+  `compat-cloud-0.9.64` starts at `d0704de2` (the last commit before the folder-API break `c8f44099`)
+  and carries three cherry-picks / new commits:
+  - `05592a79` — GHCR build workflow (`.github/workflows/build-oss-web.yml`, `workflow_dispatch` from
+    `main` with a `ref` input, tags `ghcr.io/nextc/appflowy_web:<ref>`, publicly pullable — mirrors
+    the cloud repo's `build-oss.yml`).
+  - `11914cf4` — cherry-pick of Owner-only delete gating (`a3a5d0b4` on `main`, 2026-07-27; 6 conflicts
+    hand-resolved keeping this branch's Feb-2026 code structure while preserving the `canDelete` gates
+    across all 9 UI sites and the CRDT dispatch guards, per [08 §Phase 8](08-history.md)). Its
+    `actionPermissionGates.test.tsx` test file was **dropped** from the pick — it references APIs that
+    don't exist on this older base — and still exists only on `main`.
+  - `ee87105f` — new feature commit, see below.
+- **New feature: shareable card URLs.** Opening a board card's detail modal writes `?r-modal=<rowId>`
+  into the URL via `history.pushState` (so browser Back closes the card); closing removes it via
+  `history.replaceState` (so Back doesn't reopen it). `Database.tsx` gained an `onModalRowIdChange`
+  prop plus an effect that reacts to URL-driven changes of `modalRowId` (back/forward navigation,
+  cold-loading a shared link). Cross-database modals (relation rows opened with an explicit `viewId`)
+  are intentionally **not** URL-synced — their link can't be rebuilt from the current page's URL.
+  `DatabaseView.tsx` reads `window.location.search` directly (not the `useSearchParams` snapshot) when
+  writing the param, because the modal's expand button pushes `?r=` and clears the modal in the same
+  tick — a stale snapshot would race it. Expand hands over to the pre-existing `?r=<rowId>` full-page
+  deep link, dropping `r-modal`. **Verified live on prod:** card click → URL param appears, Escape
+  removes it, cold-loading the link opens the board with the modal open and hydrated, expand → `?r=`.
+- **New feature: hidden fields expanded in card detail.** `DatabaseRowProperties.tsx` now inits
+  `isFilterHidden` with `useState(false)` in code — this is what retires nginx Patch 5 (see
+  [04](04-nginx-and-client-patches.md)). The `/static2/` module-graph path and the HTML `sub_filter`
+  rewrites Patch 5 also relies on still serve the new bundle correctly and needed no changes.
+- **Open caveats (as of this deploy):**
+  1. The write path (editing/moving cards) was **not** explicitly verified on this build — a manual
+     edit test on prod is still pending.
+  2. This build's `vite.config.ts` loads React 18.2.0 / ReactDOM 18.2.0 from `cdn.jsdelivr.net` at
+     runtime (build-time CDN externals) — a jsdelivr outage would break the app entirely.
+  3. ~~In dev testing, a first-ever load with a cold IndexedDB briefly rendered rows with empty cells
+     until row docs finished syncing (a reload fixed it).~~ **Hit prod at scale and FIXED same day —
+     see the follow-up entry below ("Boards show 'Untitled' cards for minutes on first visit").**
+  4. Cosmetic-only: the BoardTemplate board's tab label renders as the underlying view's name ("Kid
+     Achievement") on this build.
+- **Verification run:** `tsc` + `eslint` clean; manual in-browser check against production data via a
+  dev proxy (deep-link cold load, Escape/backdrop close, Back/Forward, expand, board render).
+
+---
+
+## Boards show "Untitled" cards for minutes on first visit (compat build) — FIXED (2026-09-04)
+
+- **Symptom:** right after the compat-cloud-0.9.64 deploy, every board rendered all cards as
+  "Untitled" with empty statuses on the first visit from a given browser; content trickled in slowly
+  (minutes), and a reload after hydration showed everything instantly (IndexedDB now warm).
+- **Root cause:** this web era bulk-loads row content via `POST
+  /api/workspace/{w}/database/{db}/blob/diff`, which cloud 0.9.64 does not serve (404 — route absent
+  from `src/api/workspace.rs`). With no seed source, every DatabaseRow collab hydrated one-by-one
+  over WebSocket. Meanwhile the page-view fetch the app already makes (`GET
+  /api/workspace/{w}/page-view/{viewId}`) returns **all row doc states in one response**
+  (`row_data`, raw Yjs doc_state per row — the server decodes `EncodedCollab` before sending, see
+  `get_page_collab_data_for_database` in `src/biz/workspace/page_view.rs`) — and the compat build's
+  `view-loader` logged the row count and then discarded it (it expected blob/diff to supply rows).
+- **Fix (web branch commit `9b5c4d20`, redeployed same day):** `fetchAndApply` in
+  `src/application/view-loader/index.ts` now seeds the row-doc cache from `row_data` via a new
+  `seedRowDocCacheFromPageData()` in `src/application/database-blob/index.ts` (encoder v1; applies
+  directly to already-open row docs, otherwise fills the same seed cache the blob prefetch feeds).
+  Same image tag rebuilt via `build-oss-web.yml`; deploy = `railway redeploy --service AppFlowy-Web
+  --from-source -y` only (tag unchanged).
+- **Verification:** dev with fully wiped IndexedDB against prod — TripFold (content-heavy board)
+  hydrated completely in under 5 seconds (previously minutes), `[Database] page-data seed cache
+  prepared` → `row seed hit` debug logs confirm the path; prod bundle `index-CCp6jI2L.js` confirmed
+  serving with the fix string present; prod TripFold renders fully hydrated.
+- **Note:** rows are seeded per page-view fetch (skipped when the database doc is already cached in
+  IndexedDB) — the long-tail of never-opened rows on an already-cached database still hydrates via
+  WS, which is acceptable since visible rows land in IndexedDB on first hydration.
+
+---
+
 ## New web build shows "connecting forever"
 
 - **Symptom:** after deploying a new AppFlowy-Web build, the SPA loads but "Connecting..." spinner never completes; network tab shows WebSocket never attempts to connect.
@@ -311,13 +390,28 @@ actor snapshots **only** if a websocket session is attached; cold HTTP writes ar
 
 ---
 
-## New web build: sidebar/folder won't load (version-skew)
+## New web build: sidebar/folder won't load (version-skew) — root cause pinned down + durable fix found (2026-09-04)
 
-- **Symptom:** a fresh web image boots (200), connects to cloud (no errors in cloud logs), and the authorization endpoint fires, but the sidebar and folder tree never render — the page stays blank or shows only top chrome.
-- **Root cause:** building the web image from `AppFlowy-Web:main` is **far ahead of the deployed cloud**. Version mismatch on the collab format or the API surface means the web can join the workspace (auth passes) but can't deserialize or render the folder structure against the older cloud's data. Specific root: main web ~0.16+ uses a newer database collab schema / folder serialization that the cloud `0.9.64` → web `0.9.93` pair does not support.
-- **Why it happened:** testing a custom web rebuild to deploy the delete-guardrail (see entry above). Building from `main` is the default (`git clone …`), not from a release tag. No tagged releases exist for web `0.9.93` on GitHub (the Docker image exists; the source tag does not).
-- **Fix / rollback:** reconnect the web service to `appflowyinc/appflowy_web:0.9.93` (the stock image, not a custom build) and redeploy. If you must build a custom web image, git-tag it from the known-good release date, or patch `0.9.93` directly (avoiding main).
-- **Lesson:** never build a custom web image from `main` when the deployed cloud is several releases behind. The version-pairing rule (by release date, not number) applies to rebuilds too. **Prefer nginx `sub_filter` injection for web-side changes** (e.g., client-side UI hides, script injection) to avoid the need for custom web builds and version-skew risk.
+- **Symptom:** a fresh web image boots (200), connects to cloud (no errors in cloud logs), and the authorization endpoint fires, but the sidebar and folder tree never render — the page stays blank or shows only top chrome. Also seen as **every individual view 404ing with "No access to this page"** once past the sidebar.
+- **Root cause (confirmed 2026-09-04):** `nextc/AppFlowy-Web:main` carries upstream commit `c8f44099`
+  "Use new folder api (#257)" (2026-02-18), which switched view loading to
+  `GET /api/workspace/{workspace_id}/view/{view_id}?depth=` + `/view/{view_id}/navigation`. Cloud
+  `0.9.64` (git tag, same source the OSS cloud image is built from) does **not** serve either route —
+  confirmed by reading `src/api/workspace.rs` in this repo: the only `depth` param that exists is on
+  the unrelated `get_page_view_handler` (~line 2481), not a per-view `/view/{id}?depth=` endpoint, and
+  there is no `navigation` route at all. Every view request 404s. Building web from `main` (or any
+  descendant of `c8f44099`) against cloud `0.9.64` is **unconditionally broken**, not just
+  version-skewed in a soft sense — earlier entries in this doc treated this as generic "version
+  mismatch"; this is the specific commit and API surface responsible.
+- **Why it happened:** testing a custom web rebuild to deploy the delete-guardrail (see entry below). Building from `main` is the default (`git clone …`), not from a release tag. No tagged releases exist for web `0.9.93` on GitHub (the Docker image exists; the source tag does not).
+- **Old fix / rollback (still valid):** reconnect the web service to `appflowyinc/appflowy_web:0.9.93` (the stock image, not a custom build) and redeploy.
+- **New durable fix (2026-09-04):** build custom web images from a **compat branch pinned before `c8f44099`** instead of `main`. `nextc/AppFlowy-Web` branch `compat-cloud-0.9.64` is based at
+  `d0704de2` ("chore: support resend email (#256)", 2026-02-11 — the direct first parent of
+  `c8f44099`), so it has everything up to but not including the folder-API break. This unblocks custom
+  web rebuilds again (delete-guardrail cherry-pick, new features) while staying deployable against
+  cloud `0.9.64`. Full deployment details in the entry below and in
+  [08](08-history.md).
+- **Lesson:** never build a custom web image from `main` when the deployed cloud is several releases behind — check what commit actually broke compatibility (don't just assume "too new") and branch from immediately before it. The version-pairing rule (by release date, not number) applies to rebuilds too.
 
 ---
 

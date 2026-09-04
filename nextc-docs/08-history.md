@@ -170,6 +170,45 @@ Chronological log reconstructed from all project conversations. Dates are when t
   - **Desktop:** NOT deployed (separate binary distribution; would need custom Flutter build + real `flutter analyze` in full codegen toolchain).
 - **Outcome:** Guardrail is live and functional. Members can edit but cannot delete. Server guards prevent REST deletion; nginx guardrail prevents UI-triggered CRDT deletion. See [06](06-known-issues-and-fixes.md) for the full deployment log and rollback steps.
 
+## Phase 9 — Compat web fork + shareable card URLs deploy (2026-09-04)
+
+- **Problem:** `nextc/AppFlowy-Web:main` was undeployable against cloud `0.9.64` — upstream commit
+  `c8f44099` "Use new folder api (#257)" (2026-02-18) moved view loading onto
+  `GET /view/{id}?depth=` + `/view/{id}/navigation`, neither of which cloud `0.9.64` serves, so every
+  view 404s ("No access to this page"). This is the concrete root cause behind the older, more
+  generic "sidebar/folder won't load (version-skew)" finding from Phase 8 — see
+  [06](06-known-issues-and-fixes.md).
+- **Resolution:** branched `compat-cloud-0.9.64` off `d0704de2` (2026-02-11, the immediate parent of
+  `c8f44099`) — everything up to but not including the folder-API break. Cherry-picked the GHCR build
+  workflow (`05592a79`) and the Owner-only delete gating from `main` (`11914cf4`, cherry-pick of
+  `a3a5d0b4`, 6 conflicts hand-resolved; its `main`-only test file `actionPermissionGates.test.tsx`
+  references APIs absent on this base and was dropped from the pick).
+- **New feature (`ee87105f`):** shareable card URLs — opening a board card writes `?r-modal=<rowId>`
+  into the URL (push on open so Back closes it, replace on close so Back doesn't reopen it);
+  `Database.tsx`/`DatabaseView.tsx` react to URL-driven changes for back/forward and cold-loaded
+  shared links; cross-database relation-row modals are intentionally not URL-synced. Also flipped the
+  row-detail hidden-fields default to expanded in code (`DatabaseRowProperties.tsx`
+  `useState(isFilterHidden=false)`), which **retires** nginx Patch 5 (its sub_filter is now inert —
+  see [04](04-nginx-and-client-patches.md)).
+- **Deploy:** built via GitHub Action `build-oss-web.yml` (workflow_dispatch, `ref=compat-cloud-0.9.64`)
+  → `ghcr.io/nextc/appflowy_web:compat-cloud-0.9.64` (public GHCR, same pattern as the cloud images).
+  Railway `AppFlowy-Web` service reconnected via `railway service source connect --image ...` +
+  `railway redeploy --from-source -y` (user-run; classifier-gated). **Rollback:** reconnect
+  `appflowyinc/appflowy_web:0.9.93`.
+- **Verified:** `tsc` + `eslint` clean; manual in-browser check against prod data via dev proxy —
+  card-click URL param, Escape/backdrop close, Back/Forward, cold deep-link load, expand → `?r=`,
+  board render.
+- **Open caveats carried forward:** write path (editing/moving cards) not yet explicitly verified on
+  this build; React 18.2.0/ReactDOM loaded from `cdn.jsdelivr.net` at runtime (build-time CDN
+  externals — a jsdelivr outage breaks the app); BoardTemplate's tab label cosmetically shows the
+  underlying view's name. Full detail in [06](06-known-issues-and-fixes.md).
+- **Same-day follow-up fix:** the cold-IndexedDB empty-cells quirk hit prod at scale — every first
+  visit showed boards full of "Untitled" cards for minutes (cloud 0.9.64 lacks this era's
+  `blob/diff` bulk-row endpoint, so rows hydrated one-by-one over WS). Fixed in web branch commit
+  `9b5c4d20`: the view loader now seeds row docs from the page-view fetch's `row_data` payload it
+  had been discarding. Image rebuilt on the same tag, redeployed; cold-cache board load verified in
+  seconds. Full detail in [06](06-known-issues-and-fixes.md).
+
 ## Standing constraints carried throughout
 
 - No broad Railway↔GitHub access (only `nextc/AppFlowy-Cloud`).

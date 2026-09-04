@@ -94,6 +94,16 @@ railway redeploy --service AppFlowy-Cloud --from-source
 The image tag can't be read back via the CLI (needs an API token, classifier-gated); `service source
 connect` is silent on success, so a clean redeploy / fresh migration is the proxy confirmation.
 
+Same mechanism for the web service (used 2026-09-04 to switch to a self-built compat image — see
+[06](06-known-issues-and-fixes.md)):
+
+```bash
+railway service source connect --image ghcr.io/nextc/appflowy_web:compat-cloud-0.9.64 --service AppFlowy-Web
+railway redeploy --service AppFlowy-Web --from-source -y
+```
+
+Rollback for AppFlowy-Web: reconnect `appflowyinc/appflowy_web:0.9.93` (the stock image).
+
 ## Deploy-order after a DB wipe
 
 GoTrue (recreate `auth` schema) → AppFlowy-Cloud (fresh migrate) → Worker → Web → admin-frontend.

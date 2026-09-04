@@ -28,11 +28,28 @@ date, NOT matching version numbers**:
 | `appflowy_cloud` | OSS build from git tag **`0.9.64`** | public git tags are `0.9.x`; commercial image line is `0.16.x` (~11 months ahead) |
 | `appflowy_worker` | OSS build from git tag **`0.9.64`** | same repo, same tag |
 | `gotrue` | `appflowyinc/gotrue:0.9.64` | in the 0.9.x era the gotrue image is tagged with the cloud release number; its Dockerfile clones `auth@0.8.0` |
-| `appflowy_web` | `appflowyinc/appflowy_web:0.1.19` | web was on a `0.1.x` line then; it later jumps to `0.9.93` numbering (2025-08-18). **This is why web `0.13.3` — a 2026 build — never worked with 0.9.64 cloud.** |
+| `appflowy_web` | `ghcr.io/nextc/appflowy_web:compat-cloud-0.9.64` (self-built, since 2026-09-04) | see version history below |
 | `admin_frontend` | OSS build from tag `0.9.64` (Rust) | optional; the `/console` portal |
 
 All five in the `0.9.64` set were pushed on **2025-07-04**. Collab-protocol fixes `#1495` (ping
 timeout), `#1464` (old-client init_sync loop), `#1465` (CollabParams) are all **inside** 0.9.64.
+
+**`appflowy_web`'s version history (unlike the other four, it has moved twice since first deploy):**
+
+1. **`appflowyinc/appflowy_web:0.1.19`** (initial deploy, 2026-07-06) — web was on the `0.1.x` line
+   then, paired by release date with cloud `0.9.64`. It later jumps to `0.9.93` numbering
+   (2025-08-18) — **this is why web `0.13.3`/`0.16.x` — later stock or `main`-built images — never
+   worked with 0.9.64 cloud**: they're numbered far ahead but the pairing that matters is by release
+   date and API surface, not the number.
+2. **`appflowyinc/appflowy_web:0.9.93`** (2026-07-10) — upgraded for websocket/realtime support (web
+   `0.1.19` had zero websocket code). See [06 §No realtime sync](06-known-issues-and-fixes.md).
+3. **`ghcr.io/nextc/appflowy_web:compat-cloud-0.9.64`** (2026-09-04, current) — self-built from a
+   `nextc/AppFlowy-Web` branch pinned to the last commit (`d0704de2`) before upstream broke
+   compatibility with cloud `0.9.64`'s folder API (commit `c8f44099`, see
+   [06](06-known-issues-and-fixes.md)). Carries the Owner-only delete gating and new features
+   (shareable card URLs, hidden-fields-expanded-by-default) that stock `0.9.93` doesn't have. Full
+   detail in [06](06-known-issues-and-fixes.md) and [08 §Phase 9](08-history.md). **Rollback:**
+   reconnect `appflowyinc/appflowy_web:0.9.93`.
 
 **Why tag `0.9.64` and not `main`:** `main` HEAD = `0.9.64 + ~76 untagged commits` — no same-day web
 image exists for it, so its collab-protocol pairing is unknowable. An earlier prod that ran OSS cloud

@@ -20,8 +20,10 @@ Everything here was learned the hard way across several build/debug sessions in 
 The commercial `appflowyinc/appflowy_cloud` image enforces a 1-seat license cap that is **not** in the
 AGPL source. So we build `appflowy_cloud` + `appflowy_worker` + `admin-frontend` from the OSS git tag
 `0.9.64` (via a GitHub Action in the **`nextc/AppFlowy-Cloud`** fork → public GHCR images), and run
-them on Railway alongside commercial `gotrue:0.9.64` and `appflowy_web:0.1.19` (paired by **release
-date**, not version number). Several things the commercial layer normally handles had to be rebuilt
+them on Railway alongside commercial `gotrue:0.9.64` and a self-built
+**`ghcr.io/nextc/appflowy_web:compat-cloud-0.9.64`** (originally `appflowy_web:0.1.19`, paired by
+**release date**, not version number — see [01](01-architecture.md) for the full web version
+history). Several things the commercial layer normally handles had to be rebuilt
 ourselves: **email** (Railway blocks SMTP → GoTrue `send_email` hook → our `email-hook` service →
 Brevo HTTP API), **user provisioning + team onboarding** (our `provisioner` service), **member
 management UI** (our `admin-ui` service), **signup domain restriction** (a Postgres trigger), and
@@ -53,7 +55,7 @@ management UI** (our `admin-ui` service), **signup domain restriction** (a Postg
 | Service | Image / source | Role |
 |---------|----------------|------|
 | **Nginx** | `NGINX_CONFIG_B64` (our config) | Reverse proxy; serves `b.mgvlabs.com`; billing spoof + client patches |
-| **AppFlowy-Web** | `appflowyinc/appflowy_web:0.1.19` | SPA front end |
+| **AppFlowy-Web** | `ghcr.io/nextc/appflowy_web:compat-cloud-0.9.64` (self-built, since 2026-09-04) | SPA front end |
 | **AppFlowy-Cloud** | `ghcr.io/nextc/appflowy-cloud:0.9.64` (OSS) | API + collab; **no seat cap** |
 | **AppFlowy-Worker** | `ghcr.io/nextc/appflowy-worker:0.9.64` (OSS) | Background jobs |
 | **GoTrue** | `appflowyinc/gotrue:0.9.64` | Auth |
