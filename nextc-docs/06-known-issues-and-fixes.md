@@ -529,34 +529,74 @@ actor snapshots **only** if a websocket session is attached; cold HTTP writes ar
 
 - **Symptom (tester):** on first load of a board, horizontal scrolling stutters/lags while cards are
   still loading; smooth once all cards are loaded.
-- **Root cause (from code reading, not profiled):** AppFlowy-Web `src/components/database/Database.tsx`
-  — each resolved row doc called `setRowMap({...prev,[rowId]:doc})` individually
-  (`populateRowFromCache` and `ensureRow`), so a board's ~N row loads (`Group.tsx` ~88–133 loads all
-  rows in parallel once the board is visible) produced ~N React updates. Each new `rowMap` re-ran
-  `useRowsByGroup`'s effect (`src/application/database-yjs/selector.ts` ~1049–1106, depends on
-  `rows`): full regroup of all rows, unsubscribe/resubscribe `observeDeep` on every row (O(N²) over
-  the load), new `groupResult` → all columns re-render; plus every mounted card re-renders because
-  `CardPrimitive.tsx:67` consumes the database context that contains `rowMap`. Columns are not
-  horizontally virtualized (~14 mounted). Card height re-measurement via `CardList`'s
-  `measureElement` is a secondary contributor, not changed.
-- **Fix:** `nextc/AppFlowy-Web` branch `compat-cloud-0.9.64` commit `cf3817ff` — "perf: batch row-doc
-  loads into rowMap to stop board scroll jank on first load". Row docs are queued (`enqueueRowDoc`)
-  and flushed into `rowMap` once per 100 ms (`ROW_MAP_FLUSH_MS`); `rowMapRef` is updated immediately
-  so `ensureRow`/`populateRowFromCache` still dedupe; user-created rows (`createNewRow`) still update
-  immediately. Code review (sonnet `code-reviewer`): no CRITICAL/HIGH; MEDIUM noted — `useRow` reads
-  from `rowMap` state so a card's cells can populate up to 100 ms after its title/meta
-  (`useRowMetaSelector` uses the promise value) — accepted.
-- **Verification:** `tsc` no errors in `Database.tsx`, `eslint` 0 errors. Not profiled before/after
-  (user chose deploy-and-check); tester's live first-load check is **PENDING**.
-- **Deploy:** GitHub Actions `build-oss-web.yml` run `36487579668` succeeded (2m8s) →
-  `ghcr.io/nextc/appflowy_web:compat-cloud-0.9.64` now at digest
-  `sha256:35391c89d62e8c7812ddf4bc8d60879ce1b2615858e11a88083e664b601989fd`. Railway `AppFlowy-Web`
-  redeployed as deployment `af70e0c4` (SUCCESS, 2026-09-29 04:42 +07:00). Live bundle
-  `Database-BD3OkMpG.js` verified to contain `ROW_MAP_FLUSH_MS=100` / `rowMapFlushTimerRef`. Full
-  deploy mechanics in [02](02-railway-deployment.md).
+- **First fix attempt — commit `cf3817ff`, deployed but did NOT fix the symptom (retained as a minor,
+  non-harmful change):** code-reading-only diagnosis found AppFlowy-Web
+  `src/components/database/Database.tsx` called `setRowMap({...prev,[rowId]:doc})` once per resolved
+  row doc (`populateRowFromCache`/`ensureRow`), producing ~N React updates for a board's parallel row
+  loads. `cf3817ff` — "perf: batch row-doc loads into rowMap to stop board scroll jank on first
+  load" — queues row docs (`enqueueRowDoc`) and flushes them into `rowMap` once per 100 ms
+  (`ROW_MAP_FLUSH_MS`); `rowMapRef` still updates immediately for dedup; user-created rows
+  (`createNewRow`) still update immediately. `tsc`/`eslint` clean; code review found no CRITICAL/HIGH
+  (one accepted MEDIUM: `useRow` reads from `rowMap` state so a card's cells can populate up to 100 ms
+  after its title/meta). Deployed as digest
+  `sha256:35391c89d62e8c7812ddf4bc8d60879ce1b2615858e11a88083e664b601989fd`, Railway `AppFlowy-Web`
+  deployment `af70e0c4` (SUCCESS, 2026-09-29 04:42 +07:00). **This was not profiled before deploying —
+  the tester then reported the board still laggy on first load** ("seems like cards being rendered"):
+  the fix targeted a real but minor inefficiency, not the dominant cost.
+- **Correct root cause — found by profiling the live site, not by code reading:** measured on prod in
+  Chrome with the Long Animation Frame API (`PerformanceObserver` type `long-animation-frame`,
+  buffered) during a cold load of CoreDating - Mingle2. Method: deleted all 138 IndexedDB databases
+  for b.mgvlabs.com (the app keeps one `y-indexeddb` database per row, named
+  `<dbId>_rows_<rowId>`), then reloaded and scrolled horizontally (the login token lives in
+  `localStorage` and survives the IndexedDB wipe). Result: 98 long frames totaling 11,991 ms; 11,418 ms
+  of that was attributed to 272 `DOMWebSocket.onmessage` handler invocations (~135–147 ms each, spread
+  over ~8 s); React scheduler work itself was only ~503 ms.
+  - `react-use-websocket` 4.13.0 applies every message via `flushSync(() => setLastMessage(message))`
+    (`node_modules/react-use-websocket/dist/lib/use-websocket.js:143`), so the resulting render runs
+    **synchronously inside `onmessage`**.
+  - `useAppflowyWebSocket` returns a new object per message; `AppSyncLayer` included that `webSocket`
+    (and `broadcastChannel`) in the `SyncInternalContext` memo deps, and `useSync` set a new
+    `lastUpdatedCollab` on every collab message.
+  - Net effect: `SyncInternalContext`'s value changed per message → `useAllContextData`'s memo
+    (depended on the whole `syncData`) rebuilt the app-wide `AppContext` → every `useAppContext`
+    consumer (sidebar, board, every card) re-rendered synchronously on every WebSocket message.
+- **Actual fix — commit `e6390209`:** `nextc/AppFlowy-Web` branch `compat-cloud-0.9.64` commit
+  `e6390209` — "perf: stop re-rendering the whole app on every WebSocket message" (4 files):
+  - Removed the unused `webSocket`/`broadcastChannel` fields from `SyncInternalContextType` and its
+    value (no consumers relied on them).
+  - `useSync` now sets `lastUpdatedCollab` only for `Types.Folder` messages (the only reader,
+    `AppBusinessLayer.tsx` ~220, was already gated on `Folder`).
+  - `useAllContextData`'s memo now depends on `syncData?.eventEmitter` only, not the whole `syncData`
+    object.
+  - Code review (sonnet `code-reviewer`): no CRITICAL/HIGH; confirmed `SyncInternalContext`'s value
+    stays referentially stable across non-Folder messages (`registerSyncContext`/`flushAllSync`/
+    `syncAllToServer`/`awarenessMap` are all stable references). `tsc` no non-test errors; `eslint` 0
+    errors.
+- **Deploy:** GitHub Actions `build-oss-web.yml` run `36490175194` succeeded →
+  `ghcr.io/nextc/appflowy_web:compat-cloud-0.9.64` digest
+  `sha256:15e6ccc8b531bea5b9894885b7de30532716412b40014b5a8856aa8d4485aa58`. Railway `AppFlowy-Web`
+  deployment `7958bda5` (SUCCESS, 2026-09-29 05:06 +07:00). Live entry bundle `index-DYksSXv-.js`.
+  Full deploy mechanics in [02](02-railway-deployment.md).
+- **Verification (same profiling method, live prod after this deploy):** 5 long frames, 401 ms total,
+  longest 123 ms; the WebSocket handler no longer appears in the attribution; the remaining ~375 ms is
+  React scheduler work during the initial board render.
+
+  | Metric | Before (cf3817ff live) | After (e6390209 live) |
+  |---|---|---|
+  | Long frames | 98 | 5 |
+  | Total long-frame time | 11,991 ms | 401 ms |
+  | Time in WS `onmessage` handler | 11,418 ms | 0 ms |
+  | Longest single frame | 147 ms | 123 ms |
+
 - **Rollback:**
-  `ghcr.io/nextc/appflowy_web@sha256:43782e958d901f66ea4860f79bd3518edd0db73879411f200cd6143ae6f8fa59`
-  (commit `8d1819ca`, Railway deployment `8d045693`) — now **superseded/removed** by this deploy.
+  `ghcr.io/nextc/appflowy_web@sha256:35391c89d62e8c7812ddf4bc8d60879ce1b2615858e11a88083e664b601989fd`
+  (commit `cf3817ff`, deployment `af70e0c4`) — now **removed/superseded**.
+- **Lesson:** profile before fixing perf. The first fix (`cf3817ff`) was chosen from code reading
+  alone and targeted roughly 0.5 s of the ~12 s of jank; the Long Animation Frame API on the live site
+  identified the real cost (synchronous re-renders triggered by every WebSocket message) in minutes —
+  the prod bundle kept readable names, which made attribution straightforward.
+- **Side note:** an "Untitled" card assigned to Tung Tran exists in Mingle2's Released column — likely
+  the tester's card from the auto-assign bug *(unverified who created it)*.
 
 ---
 

@@ -115,13 +115,26 @@ digest. **Rollback to the pre-09-28 build specifically** (not stock 0.9.93):
 `ghcr.io/nextc/appflowy_web@sha256:30d363df087b545845157b06a2fb910d878556bf24dfccf21dcd9cdd43f3bcc4`
 (commit `9b5c4d20`, Railway deployment `54624144`).
 
-**2026-09-29 redeploy (same tag, new digest):** the `compat-cloud-0.9.64` tag was rebuilt again
-(commit `cf3817ff` — board first-load scroll-jank fix, see [06](06-known-issues-and-fixes.md)) via the
-same `build-oss-web.yml` workflow (run `36487579668`) and pushed to the **same** tag; `railway
-redeploy --service AppFlowy-Web --from-source -y` picked it up as Railway deployment `af70e0c4`
-(SUCCESS, 2026-09-29 04:42 +07:00). New digest:
+**2026-09-29 redeploy #1 (same tag, new digest) — did NOT fix the board scroll-jank symptom:** the
+`compat-cloud-0.9.64` tag was rebuilt again (commit `cf3817ff` — a board first-load scroll-jank fix
+attempt, see [06](06-known-issues-and-fixes.md)) via the same `build-oss-web.yml` workflow (run
+`36487579668`) and pushed to the **same** tag; `railway redeploy --service AppFlowy-Web --from-source
+-y` picked it up as Railway deployment `af70e0c4` (SUCCESS, 2026-09-29 04:42 +07:00). New digest:
 `sha256:35391c89d62e8c7812ddf4bc8d60879ce1b2615858e11a88083e664b601989fd`. This **supersedes and
-removes** the 2026-09-28 build. **Rollback to the pre-09-29 build specifically:**
+removes** the 2026-09-28 build. The tester reported the board was still laggy on first load after this
+deploy — `cf3817ff` addressed a real but minor inefficiency, not the dominant cause (see
+[06](06-known-issues-and-fixes.md)).
+
+**2026-09-29 redeploy #2 (same tag, new digest) — the actual scroll-jank fix:** profiling with the
+Long Animation Frame API identified the true cost as synchronous whole-app re-renders on every
+WebSocket message (see [06](06-known-issues-and-fixes.md)). The `compat-cloud-0.9.64` tag was rebuilt
+again (commit `e6390209` — "perf: stop re-rendering the whole app on every WebSocket message") via the
+same `build-oss-web.yml` workflow (run `36490175194`) and pushed to the **same** tag; `railway
+redeploy --service AppFlowy-Web --from-source -y` picked it up as Railway deployment `7958bda5`
+(SUCCESS, 2026-09-29 05:06 +07:00). New digest:
+`sha256:15e6ccc8b531bea5b9894885b7de30532716412b40014b5a8856aa8d4485aa58`. Live entry bundle
+`index-DYksSXv-.js`. This **supersedes and removes** redeploy #1 above. **Rollback to the pre-09-29
+build specifically:**
 `ghcr.io/nextc/appflowy_web@sha256:43782e958d901f66ea4860f79bd3518edd0db73879411f200cd6143ae6f8fa59`
 (commit `8d1819ca`, Railway deployment `8d045693`).
 

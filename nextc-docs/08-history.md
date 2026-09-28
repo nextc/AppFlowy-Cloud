@@ -241,23 +241,37 @@ Chronological log reconstructed from all project conversations. Dates are when t
 
 - **Problem:** tester reported horizontal scrolling stutters/lags on a board's first load while cards
   are still loading; smooths out once loading finishes.
-- **Root cause (code reading, not profiled):** `Database.tsx` called `setRowMap` once per resolved row
-  doc, so a board's parallel row loads produced one React state update per row — each triggering
-  `useRowsByGroup`'s full regroup + `observeDeep` resubscribe on every row (`selector.ts`) and a
-  re-render of every mounted card (`CardPrimitive.tsx` consumes `rowMap` via context). Columns aren't
-  horizontally virtualized (~14 mounted), compounding the re-render cost.
-- **Fix:** `nextc/AppFlowy-Web` branch `compat-cloud-0.9.64` commit `cf3817ff` batches queued row-doc
-  loads into `rowMap` on a 100 ms flush timer instead of one `setRowMap` per row; `rowMapRef` still
-  updates immediately for dedup, and user-created rows still update immediately. `tsc`/`eslint` clean;
-  code review found no CRITICAL/HIGH (one accepted MEDIUM: cell population can lag title/meta by up to
-  100 ms).
-- **Deploy:** rebuilt the same `compat-cloud-0.9.64` tag (GitHub Actions run `36487579668`) → digest
-  `sha256:35391c89d62e8c7812ddf4bc8d60879ce1b2615858e11a88083e664b601989fd`; Railway `AppFlowy-Web`
-  redeployed as deployment `af70e0c4` (SUCCESS, 2026-09-29 04:42 +07:00), superseding the 2026-09-28
-  build (digest `sha256:43782e958…`, deployment `8d045693`). Live bundle confirmed to contain
-  `ROW_MAP_FLUSH_MS` / `rowMapFlushTimerRef`.
-- **Not profiled before/after** — user chose deploy-and-check over measuring. Tester's live
-  confirmation is **PENDING** as of this writing.
+- **First attempt — commit `cf3817ff`, deployed but did NOT fix the symptom:** code-reading-only
+  diagnosis found `Database.tsx` called `setRowMap` once per resolved row doc, so a board's parallel
+  row loads produced one React state update per row. `cf3817ff` batches queued row-doc loads into
+  `rowMap` on a 100 ms flush timer instead of one `setRowMap` per row; `rowMapRef` still updates
+  immediately for dedup, user-created rows still update immediately. `tsc`/`eslint` clean; code review
+  found no CRITICAL/HIGH. Deployed as digest `sha256:35391c89d…`, Railway deployment `af70e0c4`
+  (SUCCESS, 2026-09-29 04:42 +07:00) — **not profiled before deploying**. The tester then reported the
+  board was still laggy on first load; this fix addressed a real but minor inefficiency, not the
+  dominant cost, and is retained as a harmless change.
+- **Root cause, found by profiling the live site:** the Long Animation Frame API
+  (`PerformanceObserver` type `long-animation-frame`) on a cold load of CoreDating - Mingle2 (all 138
+  IndexedDB row-doc databases for b.mgvlabs.com deleted, then reload + scroll) showed 98 long frames /
+  11,991 ms total, with 11,418 ms attributed to 272 `DOMWebSocket.onmessage` invocations — not to React
+  render work (~503 ms). `react-use-websocket` 4.13.0 applies each message via
+  `flushSync(() => setLastMessage(message))`, running the resulting render synchronously inside
+  `onmessage`; `AppSyncLayer`'s `SyncInternalContext` memo included the per-message `webSocket` object
+  and `useSync` bumped `lastUpdatedCollab` on every collab message, so the context value changed on
+  every WebSocket message and rebuilt the app-wide `AppContext` — re-rendering the sidebar, board, and
+  every card synchronously per message.
+- **Actual fix — commit `e6390209`** ("perf: stop re-rendering the whole app on every WebSocket
+  message"): drops unused `webSocket`/`broadcastChannel` from `SyncInternalContextType`; `useSync` only
+  sets `lastUpdatedCollab` for `Types.Folder` messages; `useAllContextData`'s memo now depends on
+  `syncData?.eventEmitter` only. Code review: no CRITICAL/HIGH. `tsc`/`eslint` clean. Deployed as
+  digest `sha256:15e6ccc8b…`, Railway deployment `7958bda5` (SUCCESS, 2026-09-29 05:06 +07:00), live
+  bundle `index-DYksSXv-.js`.
+- **Verified fixed:** same profiling method on live prod after this deploy — 5 long frames / 401 ms
+  total (longest 123 ms), WebSocket handler no longer in the attribution, remaining time is React's
+  initial board render.
+- **Lesson:** profile before fixing perf — the first fix was chosen from code reading alone and
+  targeted ~0.5 s of the ~12 s of jank; the Long Animation Frame API on the live site (readable names
+  in the prod bundle) found the real cost in minutes.
 - Full write-up in [06](06-known-issues-and-fixes.md); deploy mechanics in
   [02](02-railway-deployment.md).
 
