@@ -104,6 +104,27 @@ railway redeploy --service AppFlowy-Web --from-source -y
 
 Rollback for AppFlowy-Web: reconnect `appflowyinc/appflowy_web:0.9.93` (the stock image).
 
+**2026-09-28 redeploy (same tag, new digest):** the `compat-cloud-0.9.64` tag was rebuilt again
+(commit `8d1819ca` — new-row filter-prefill fix, see [06](06-known-issues-and-fixes.md)) via the same
+`build-oss-web.yml` workflow (run `36397783913`) and pushed to the **same** tag; `railway redeploy
+--service AppFlowy-Web --from-source -y` picked it up as Railway deployment `8d045693` (SUCCESS,
+2026-09-28 15:34 +07:00). New digest:
+`sha256:43782e958d901f66ea4860f79bd3518edd0db73879411f200cd6143ae6f8fa59`. Because the tag is reused,
+a plain redeploy does not by itself prove which build is live — check the served bundle or the
+digest. **Rollback to the pre-09-28 build specifically** (not stock 0.9.93):
+`ghcr.io/nextc/appflowy_web@sha256:30d363df087b545845157b06a2fb910d878556bf24dfccf21dcd9cdd43f3bcc4`
+(commit `9b5c4d20`, Railway deployment `54624144`).
+
+**2026-09-29 redeploy (same tag, new digest):** the `compat-cloud-0.9.64` tag was rebuilt again
+(commit `cf3817ff` — board first-load scroll-jank fix, see [06](06-known-issues-and-fixes.md)) via the
+same `build-oss-web.yml` workflow (run `36487579668`) and pushed to the **same** tag; `railway
+redeploy --service AppFlowy-Web --from-source -y` picked it up as Railway deployment `af70e0c4`
+(SUCCESS, 2026-09-29 04:42 +07:00). New digest:
+`sha256:35391c89d62e8c7812ddf4bc8d60879ce1b2615858e11a88083e664b601989fd`. This **supersedes and
+removes** the 2026-09-28 build. **Rollback to the pre-09-29 build specifically:**
+`ghcr.io/nextc/appflowy_web@sha256:43782e958d901f66ea4860f79bd3518edd0db73879411f200cd6143ae6f8fa59`
+(commit `8d1819ca`, Railway deployment `8d045693`).
+
 ## Deploy-order after a DB wipe
 
 GoTrue (recreate `auth` schema) → AppFlowy-Cloud (fresh migrate) → Worker → Web → admin-frontend.

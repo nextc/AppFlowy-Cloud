@@ -322,6 +322,9 @@ actor snapshots **only** if a websocket session is attached; cold HTTP writes ar
     `actionPermissionGates.test.tsx` test file was **dropped** from the pick — it references APIs that
     don't exist on this older base — and still exists only on `main`.
   - `ee87105f` — new feature commit, see below.
+  - **Later addition (2026-09-28):** `8d1819ca` — "fix: stop pre-filling new rows from active view
+    filters". See "New card auto-assigned a member on Enter" below for the bug it fixes and the
+    redeploy details.
 - **New feature: shareable card URLs.** Opening a board card's detail modal writes `?r-modal=<rowId>`
   into the URL via `history.pushState` (so browser Back closes the card); closing removes it via
   `history.replaceState` (so Back doesn't reopen it). `Database.tsx` gained an `onModalRowIdChange`
@@ -451,6 +454,127 @@ actor snapshots **only** if a websocket session is attached; cold HTTP writes ar
 - **Lesson:** never build a custom web image from `main` when the deployed cloud is several releases behind — check what commit actually broke compatibility (don't just assume "too new") and branch from immediately before it. The version-pairing rule (by release date, not number) applies to rebuilds too.
 
 ---
+
+---
+
+## Board drag lands a card in a phantom "No Status" column (padded select-option) — FIXED (2026-09-28)
+
+- **Symptom:** on the "CoreDating - Mingle2" board, dragging a card from column "M2A-P49" to "In
+  Progress" made it jump into a "No Status" column that had never been visible before.
+- **Root cause:** the Status option on that board had both **id and name** `"In Progress "`
+  (trailing space — legacy artifact from the Kan.bn migration). The web build deployed 2026-09-04
+  (`compat-cloud-0.9.64`) groups cards in `src/application/database-yjs/group.ts` (~lines 190–194):
+  the cell value is split on `,`, `.trim()`-ed, then matched against the option's **id or name**.
+  Trimmed `"In Progress"` matched neither, so the card landed in the No-Status group (group id ==
+  field id) — that column only renders once it has cards, which is why it "appeared from nowhere".
+  The `.trim()` was added upstream in commit `1042e51cc` (2025-12-11), **after** the previously
+  deployed `appflowyinc/appflowy_web:0.9.93` image (Aug 2025) — so this is a regression introduced by
+  the 2026-09-04 web swap (see "Custom web image deployed to prod" above), not new bad data.
+- **Scope:** scanned all 19 AppFlowy boards for padded select-option ids — only **CoreDating -
+  Mingle2** (database `832b8a9a-6d98-4287-81fd-e02b7c8849aa`, field `PHAgs5`) and **CoreDating -
+  JSH** (database `8cab7d38-5b68-4905-9a3d-4d65917710a9`, field `MqkY5U`) had them.
+- **Fix (data only, no row writes):** trimmed the option **name** to `"In Progress"` while keeping
+  the padded **id** `"In Progress "` (which is also the board's group id) — the trimmed lookup now
+  matches by name and still resolves back to the existing padded id/group, so no row writes were
+  needed. Script: `mgvlabs_kb/appflowy-migration/fix_padded_option.mjs` (database-collab
+  `web-update`, `--dry` run first, executed with `keepalive.mjs` attached to hold the workspace actor
+  open — see the cold-actor snapshot bug above). Collab read-back confirmed the trimmed name on both
+  boards.
+- **Verified:** Mingle2 database collab `af_collab.updated_at = 2026-09-28 08:28:56 UTC` (postdates
+  both writes below; blob length 0 because the collab is S3-backed — see the storage-fact entry
+  below, this is expected, not data loss). JSH database collab: 5338-byte inline blob containing the
+  trimmed name, `updated_at 08:20:17 UTC`.
+- **Lesson:** never let select-option ids or names carry leading/trailing whitespace — a newer web
+  client can start `.trim()`-ing cell values at any point and silently orphan the row into "No
+  Status". Same root defect as "Select-option names with leading/trailing whitespace can never be set
+  via REST" above, different symptom (there: cell writer trims on write; here: web client trims on
+  read/group).
+
+---
+
+## New card auto-assigned a member on Enter — active view filter leaking into new rows — FIXED (2026-09-28)
+
+- **Symptom:** creating a card and pressing Enter auto-assigned the member "Tung Tran" — with no UI
+  action taken to select them.
+- **Root cause:** the Mingle2 board view (`19ee2ad7-8dbf-4a0b-b9f7-a0dee1956754`) had a saved filter
+  (id `HW68kN`) on the Members field (`kk6znA`), condition 2, content `"Tung Tran"`. Upstream web's
+  `useNewRowDispatch` copies every active filter's value into a newly created row's cells so the row
+  stays visible on the filtered view. Filters are stored in the **database collab**, which is shared
+  by everyone — so the whole team was also only ever seeing Tung Tran's cards on that view. It was
+  the only saved filter across all 19 boards; who added it is *(unverified — needs check)*.
+- **Fix (data):** removed the filter via `mgvlabs_kb/appflowy-migration/fix_padded_option.mjs
+  --remove-filter`; collab read-back shows the view's filter list is now empty.
+- **Fix (code):** `nextc/AppFlowy-Web` branch `compat-cloud-0.9.64` commit `8d1819ca` — "fix: stop
+  pre-filling new rows from active view filters". Both copies of `useNewRowDispatch`
+  (`src/application/database-yjs/dispatch.ts` and `dispatch/row.ts`) no longer write filter values
+  into a new row's cells; the `shouldOpenRowModal` behavior (calendar date-field filter,
+  CreatedTime/LastEditedTime filters) is unchanged. **Tradeoff:** on a filtered view, a newly created
+  row that doesn't match the filter is now hidden from that view until edited to match it. `tsc`: no
+  errors in the touched files; `eslint`: 0 errors.
+- **Deploy:** pushed to `nextc/AppFlowy-Web`; GitHub Actions `build-oss-web.yml` run `36397783913`
+  succeeded (2m26s) → `ghcr.io/nextc/appflowy_web:compat-cloud-0.9.64` now at digest
+  `sha256:43782e958d901f66ea4860f79bd3518edd0db73879411f200cd6143ae6f8fa59`. Railway `AppFlowy-Web`
+  redeployed as deployment `8d045693` (SUCCESS, 2026-09-28 15:34 +07:00). Live bundle
+  `/static2/js/index-dwoNjbo_.js` verified to contain the new no-prefill code. Full deploy mechanics
+  in [02](02-railway-deployment.md).
+- **Rollback:**
+  `ghcr.io/nextc/appflowy_web@sha256:30d363df087b545845157b06a2fb910d878556bf24dfccf21dcd9cdd43f3bcc4`
+  (previous build, commit `9b5c4d20`, Railway deployment `54624144`).
+- **Verification pending:** rendered-board confirmation by the tester (hard reload) — not yet done as
+  of this writing.
+
+---
+
+## Board first-load scroll jank — FIXED (2026-09-29)
+
+- **Symptom (tester):** on first load of a board, horizontal scrolling stutters/lags while cards are
+  still loading; smooth once all cards are loaded.
+- **Root cause (from code reading, not profiled):** AppFlowy-Web `src/components/database/Database.tsx`
+  — each resolved row doc called `setRowMap({...prev,[rowId]:doc})` individually
+  (`populateRowFromCache` and `ensureRow`), so a board's ~N row loads (`Group.tsx` ~88–133 loads all
+  rows in parallel once the board is visible) produced ~N React updates. Each new `rowMap` re-ran
+  `useRowsByGroup`'s effect (`src/application/database-yjs/selector.ts` ~1049–1106, depends on
+  `rows`): full regroup of all rows, unsubscribe/resubscribe `observeDeep` on every row (O(N²) over
+  the load), new `groupResult` → all columns re-render; plus every mounted card re-renders because
+  `CardPrimitive.tsx:67` consumes the database context that contains `rowMap`. Columns are not
+  horizontally virtualized (~14 mounted). Card height re-measurement via `CardList`'s
+  `measureElement` is a secondary contributor, not changed.
+- **Fix:** `nextc/AppFlowy-Web` branch `compat-cloud-0.9.64` commit `cf3817ff` — "perf: batch row-doc
+  loads into rowMap to stop board scroll jank on first load". Row docs are queued (`enqueueRowDoc`)
+  and flushed into `rowMap` once per 100 ms (`ROW_MAP_FLUSH_MS`); `rowMapRef` is updated immediately
+  so `ensureRow`/`populateRowFromCache` still dedupe; user-created rows (`createNewRow`) still update
+  immediately. Code review (sonnet `code-reviewer`): no CRITICAL/HIGH; MEDIUM noted — `useRow` reads
+  from `rowMap` state so a card's cells can populate up to 100 ms after its title/meta
+  (`useRowMetaSelector` uses the promise value) — accepted.
+- **Verification:** `tsc` no errors in `Database.tsx`, `eslint` 0 errors. Not profiled before/after
+  (user chose deploy-and-check); tester's live first-load check is **PENDING**.
+- **Deploy:** GitHub Actions `build-oss-web.yml` run `36487579668` succeeded (2m8s) →
+  `ghcr.io/nextc/appflowy_web:compat-cloud-0.9.64` now at digest
+  `sha256:35391c89d62e8c7812ddf4bc8d60879ce1b2615858e11a88083e664b601989fd`. Railway `AppFlowy-Web`
+  redeployed as deployment `af70e0c4` (SUCCESS, 2026-09-29 04:42 +07:00). Live bundle
+  `Database-BD3OkMpG.js` verified to contain `ROW_MAP_FLUSH_MS=100` / `rowMapFlushTimerRef`. Full
+  deploy mechanics in [02](02-railway-deployment.md).
+- **Rollback:**
+  `ghcr.io/nextc/appflowy_web@sha256:43782e958d901f66ea4860f79bd3518edd0db73879411f200cd6143ae6f8fa59`
+  (commit `8d1819ca`, Railway deployment `8d045693`) — now **superseded/removed** by this deploy.
+
+---
+
+## `af_collab.blob` is 0 bytes for large collabs — expected (S3-backed), not data loss
+
+- **What it looks like:** querying `af_collab` for a large database/document collab shows `blob`
+  length `0`, which reads like the write never landed.
+- **Actually correct behavior:** `services/appflowy-collaborate/src/config.rs:209`
+  `APPFLOWY_COLLAB_S3_THRESHOLD` defaults to `8000` bytes — any `encoded_collab_v1` larger than that
+  is stored in **S3** (key `collabs/{workspace_id}/{object_id}/`, `disk_cache.rs` ~lines 121, 723)
+  instead of inline in Postgres, and `af_collab.blob` is left empty (length 0) **by design**.
+- **How to check persistence instead:** use `af_collab.updated_at` postdating your write as the
+  persistence signal, not blob length/presence. (Postgres database name is `railway` — e.g.
+  `railway ssh --service pgvector "psql -U postgres -d railway ..."`.)
+- **Example (2026-09-28, the fix above):** Mingle2 database collab — blob length 0,
+  `updated_at 2026-09-28 08:28:56 UTC` (after the write) — correctly S3-backed, not data loss. JSH
+  database collab — 5338-byte inline blob (under the 8000-byte threshold) containing the trimmed
+  name, `updated_at 08:20:17 UTC`.
 
 ---
 

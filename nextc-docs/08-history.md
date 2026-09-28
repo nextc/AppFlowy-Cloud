@@ -209,6 +209,58 @@ Chronological log reconstructed from all project conversations. Dates are when t
   had been discarding. Image rebuilt on the same tag, redeployed; cold-cache board load verified in
   seconds. Full detail in [06](06-known-issues-and-fixes.md).
 
+## Phase 10 — Two prod bugs on the compat web build: phantom "No Status" column + filter-leaking new rows (2026-09-28)
+
+- **Bug 1 — board drag lands cards in a phantom "No Status" column:** CoreDating - Mingle2's Status
+  option `"In Progress "` (trailing space, legacy Kan.bn artifact) stopped matching once the
+  2026-09-04 compat web build's grouping logic started `.trim()`-ing cell values (upstream commit
+  `1042e51cc`, 2025-12-11) — cards fell into an unlabeled No-Status group that only renders once it
+  has cards. Scanned all 19 boards; only Mingle2 and CoreDating - JSH had padded option ids. Fixed by
+  trimming the option **name** only (kept the padded id, which doubles as the group id) via a
+  database-collab web-update — no row writes needed. Verified via collab read-back and
+  `af_collab.updated_at`.
+- **Bug 2 — new cards auto-assigned member "Tung Tran":** the Mingle2 board view had a saved Members
+  filter (`content: "Tung Tran"`) that upstream `useNewRowDispatch` was copying into every newly
+  created row so the row would stay visible on the filtered view — since filters live in the shared
+  database collab, this also meant the whole team's filtered view only ever showed Tung Tran's cards.
+  Fixed in two parts: removed the stray filter (data fix), and shipped `nextc/AppFlowy-Web` branch
+  `compat-cloud-0.9.64` commit `8d1819ca` so `useNewRowDispatch` no longer pre-fills new rows from
+  active filters (tradeoff: a new row that doesn't match a filter is now hidden on that view until
+  edited to match it). Rebuilt + redeployed the same `compat-cloud-0.9.64` tag (GitHub Actions run
+  `36397783913`, Railway deployment `8d045693`); rollback is the previous digest, commit `9b5c4d20`,
+  deployment `54624144`.
+- **Storage-layer clarification uncovered along the way:** a `0`-byte `af_collab.blob` for a large
+  collab is **expected** — `APPFLOWY_COLLAB_S3_THRESHOLD` (default 8000 bytes) routes bigger collabs
+  to S3 instead of Postgres; use `updated_at`, not blob presence, as the persistence signal.
+- Full write-ups in [06](06-known-issues-and-fixes.md); image/deploy detail in
+  [02](02-railway-deployment.md).
+- **Still open:** rendered-board confirmation by the tester (hard reload) for Bug 2 — not done as of
+  this writing.
+
+## Phase 11 — Board first-load scroll jank fix (2026-09-29)
+
+- **Problem:** tester reported horizontal scrolling stutters/lags on a board's first load while cards
+  are still loading; smooths out once loading finishes.
+- **Root cause (code reading, not profiled):** `Database.tsx` called `setRowMap` once per resolved row
+  doc, so a board's parallel row loads produced one React state update per row — each triggering
+  `useRowsByGroup`'s full regroup + `observeDeep` resubscribe on every row (`selector.ts`) and a
+  re-render of every mounted card (`CardPrimitive.tsx` consumes `rowMap` via context). Columns aren't
+  horizontally virtualized (~14 mounted), compounding the re-render cost.
+- **Fix:** `nextc/AppFlowy-Web` branch `compat-cloud-0.9.64` commit `cf3817ff` batches queued row-doc
+  loads into `rowMap` on a 100 ms flush timer instead of one `setRowMap` per row; `rowMapRef` still
+  updates immediately for dedup, and user-created rows still update immediately. `tsc`/`eslint` clean;
+  code review found no CRITICAL/HIGH (one accepted MEDIUM: cell population can lag title/meta by up to
+  100 ms).
+- **Deploy:** rebuilt the same `compat-cloud-0.9.64` tag (GitHub Actions run `36487579668`) → digest
+  `sha256:35391c89d62e8c7812ddf4bc8d60879ce1b2615858e11a88083e664b601989fd`; Railway `AppFlowy-Web`
+  redeployed as deployment `af70e0c4` (SUCCESS, 2026-09-29 04:42 +07:00), superseding the 2026-09-28
+  build (digest `sha256:43782e958…`, deployment `8d045693`). Live bundle confirmed to contain
+  `ROW_MAP_FLUSH_MS` / `rowMapFlushTimerRef`.
+- **Not profiled before/after** — user chose deploy-and-check over measuring. Tester's live
+  confirmation is **PENDING** as of this writing.
+- Full write-up in [06](06-known-issues-and-fixes.md); deploy mechanics in
+  [02](02-railway-deployment.md).
+
 ## Standing constraints carried throughout
 
 - No broad Railway↔GitHub access (only `nextc/AppFlowy-Cloud`).
