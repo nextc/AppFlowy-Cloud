@@ -600,6 +600,58 @@ actor snapshots **only** if a websocket session is attached; cold HTTP writes ar
 
 ---
 
+## CRITICAL: card edits (title/description) not saved, lost on hard reload — FIXED (2026-09-29)
+
+- **Symptom (tester):** updating a card's description/title no longer saved; a hard reload (Cmd+R)
+  made the edit disappear.
+- **Live diagnosis (prod, web deployment `7958bda5`, bundle `index-DYksSXv-.js`):** on card "test"
+  (row `44941408-03d1-46c3-96f9-1dc4a08cad3e`, CoreDating - Mingle2), editing the title changed it
+  locally, but no WebSocket update for the row collab (type 4) was ever sent — the server's collab
+  read still returned `'test'`. Walking the page's React database context: all 135/135 row docs in
+  `rowMap` had `guid` still in `rowKey` form `"<dbId>_rows_<rowId>"` with a single `'update'` listener
+  (`y-indexeddb` only) — i.e. never registered for sync (the app's `createRow` in
+  `useViewOperations.ts` sets `doc.guid = rowId` and calls `registerSyncContext`). Calling the
+  context's `createRow(rowKey)` directly returned a **different** Y.Doc instance (registered,
+  `guid = rowId`) than the one already in `rowMap`.
+- **Root cause:** a race in AppFlowy-Web `src/application/services/js-services/cache/index.ts`
+  `getOrCreateRowDocEntry` — it checked the `rowDocs` map, `await`ed `openCollabDBWithProvider`
+  (IndexedDB open), then set the entry. A mounting card's `bindRowSync → registerRowSync → createRow`
+  and the board's `populateRowFromCache → createRowFast` request the same row concurrently, before the
+  awaited open resolves → two Y.Docs created for one row; sync got registered on one, the board/modal
+  edited the other → edits persisted only to local IndexedDB, never reached the server. The race is in
+  upstream code; the two same-day perf deploys (`cf3817ff`, `e6390209`) most likely changed load
+  timing so it hit every card *(causal timing link unverified)*.
+- **Fix:** AppFlowy-Web `compat-cloud-0.9.64` commit `5fad2172` — "fix: share in-flight row doc opens
+  so card edits sync to the server" — adds a `pendingRowDocEntries` map so concurrent callers for the
+  same row share the in-flight open instead of racing to create separate docs (ORDER-tagged comment in
+  the diff). `tsc` clean for non-test code, `eslint` clean. The existing `cache.test.ts` does not cover
+  row docs — no tests changed or added.
+- **Deploy:** GitHub Actions `build-oss-web.yml` run `36496870314` succeeded. Railway `AppFlowy-Web`
+  deployment `51d67a26` (SUCCESS, 2026-09-29 06:16 +07:00). Live bundle `index-BtS1lMX7.js`. Image
+  digest `sha256:d867498ee094a9d0e7df2d79b6501986bff62ee64358141fe550954bbe275b37` (read from the GHCR
+  registry manifest). Full deploy mechanics in [02](02-railway-deployment.md).
+- **Post-deploy verification (prod):** 135/135 row docs now registered for sync (`guid = rowId`, 2
+  `update` listeners). The edit typed during the bug window (`'test123'`, held only in local
+  IndexedDB) synced to the server automatically on reload; a fresh edit (`'test123' → 'test'`) reached
+  the server and survived a hard reload.
+- **Recovery note:** edits made while the bug was live are sitting in that browser's IndexedDB (both
+  duplicate docs persisted to the same per-row IndexedDB database) and self-recover by reopening the
+  board in the same browser on the fixed build — unless the browser's site data was cleared in
+  between.
+- **Detection recipe:** in the page, walk the React fiber from a board/modal element up to the context
+  value carrying `rowMap`; any row doc whose `guid` is not the bare `rowId` is not registered for
+  sync.
+- **Collateral (own mistake during diagnosis, reverted):** an accidental click on "+ New property" in
+  the card modal created an empty "Text" field (id `HrsnJo`, 2026-09-28 22:55:44 UTC) on Mingle2;
+  removed via a database-collab web-update (fields map + both views' `field_orders`/`field_settings`);
+  server now shows the original 7 fields.
+- **Lesson:** after any change that alters load timing, verify the write path (edit → server
+  read-back → hard reload), not just rendering/perf — the compat build's open write-path caveat
+  (entry above, "Custom web image deployed to prod") had flagged this exact gap as untested back on
+  2026-09-04.
+
+---
+
 ## `af_collab.blob` is 0 bytes for large collabs — expected (S3-backed), not data loss
 
 - **What it looks like:** querying `af_collab` for a large database/document collab shows `blob`

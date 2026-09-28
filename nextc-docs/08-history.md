@@ -275,6 +275,40 @@ Chronological log reconstructed from all project conversations. Dates are when t
 - Full write-up in [06](06-known-issues-and-fixes.md); deploy mechanics in
   [02](02-railway-deployment.md).
 
+## Phase 12 — CRITICAL card-edit-not-saved bug found and fixed same day as the scroll-jank fix (2026-09-29)
+
+- **Problem:** shortly after the scroll-jank fix (Phase 11) deployed, the tester reported card
+  title/description edits weren't saving — a hard reload made the edit disappear.
+- **Live diagnosis on prod:** editing a card's title changed it locally but sent no WebSocket update
+  for the row collab; the server's collab read still returned the old value. Walking the page's React
+  database context showed all 135/135 row docs in `rowMap` were registered under the wrong `guid`
+  (`rowKey` form, not the bare `rowId`) with only a local IndexedDB listener — never wired for sync.
+- **Root cause:** a race in AppFlowy-Web's `getOrCreateRowDocEntry` (`cache/index.ts`) — it checked
+  for an existing row doc, awaited an IndexedDB open, then registered the entry; two callers
+  requesting the same row concurrently (a card mount's `bindRowSync` vs. the board's
+  `populateRowFromCache`) each created a separate Y.Doc before the await resolved, so sync got
+  registered on one doc while the board/modal edited the other. The race is upstream code; the two
+  same-day perf deploys (`cf3817ff`, `e6390209`) most likely changed load timing enough to hit every
+  card, though that causal link is unverified.
+- **Fix:** `compat-cloud-0.9.64` commit `5fad2172` adds a `pendingRowDocEntries` map so concurrent
+  callers share the in-flight doc open instead of racing to create duplicates. `tsc`/`eslint` clean
+  (no row-doc test coverage existed to update).
+- **Deploy:** GitHub Actions `build-oss-web.yml` run `36496870314` → same tag, Railway deployment
+  `51d67a26` (SUCCESS, 2026-09-29 06:16 +07:00), live bundle `index-BtS1lMX7.js`. **The prior
+  deployment (`7958bda5`, commit `e6390209`) still has this bug and must not be used as a rollback
+  target.**
+- **Verified:** post-deploy, all 135/135 row docs registered correctly; an edit made during the bug
+  window (held only in local IndexedDB) synced to the server on reload; a fresh edit reached the
+  server and survived a hard reload. Edits made by users during the bug window self-recover on
+  reopening the board in the same browser, unless site data was cleared.
+- **Collateral:** an accidental extra field ("Text", id `HrsnJo`) created during diagnosis on Mingle2
+  was removed via a database-collab web-update.
+- **Lesson:** a perf-motivated web change (Phase 11) needs its write path re-verified, not just its
+  render/perf profile — the same gap the compat-build deploy's open write-path caveat flagged back in
+  Phase 9.
+- Full write-up in [06](06-known-issues-and-fixes.md); deploy mechanics in
+  [02](02-railway-deployment.md).
+
 ## Standing constraints carried throughout
 
 - No broad Railway↔GitHub access (only `nextc/AppFlowy-Cloud`).

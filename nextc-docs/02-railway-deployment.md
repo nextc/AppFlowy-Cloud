@@ -138,6 +138,24 @@ build specifically:**
 `ghcr.io/nextc/appflowy_web@sha256:43782e958d901f66ea4860f79bd3518edd0db73879411f200cd6143ae6f8fa59`
 (commit `8d1819ca`, Railway deployment `8d045693`).
 
+**2026-09-29 redeploy #3 (same tag, new digest) — fixes CRITICAL card-edit-not-saved bug:** live
+diagnosis on prod found card title/description edits were syncing only to local IndexedDB and never
+reaching the server, so they vanished on hard reload (see [06](06-known-issues-and-fixes.md)). The
+`compat-cloud-0.9.64` tag was rebuilt again (commit `5fad2172` — "fix: share in-flight row doc opens
+so card edits sync to the server") via the same `build-oss-web.yml` workflow (run `36496870314`) and
+pushed to the **same** tag; `railway redeploy --service AppFlowy-Web --from-source -y` picked it up as
+Railway deployment `51d67a26` (SUCCESS, 2026-09-29 06:16 +07:00). Live bundle `index-BtS1lMX7.js`.
+New digest: `sha256:d867498ee094a9d0e7df2d79b6501986bff62ee64358141fe550954bbe275b37` (read from the
+GHCR registry manifest; no newer build has been pushed to the tag since). This **supersedes and
+removes** redeploy #2 above.
+**Rollback caveat — CRITICAL:** the redeploy #2 image (digest
+`sha256:15e6ccc8b531bea5b9894885b7de30532716412b40014b5a8856aa8d4485aa58`, commit `e6390209`, Railway
+deployment `7958bda5`) **still has the card-edit-not-saved bug** — do **not** use it as a rollback
+target. Every earlier compat build also contains the racy code: `cache/index.ts` is identical from
+`9b5c4d20` through `e6390209` (verified with `git diff`), including `8d1819ca` (digest
+`sha256:43782e958d901f66ea4860f79bd3518edd0db73879411f200cd6143ae6f8fa59`). The race depends on timing,
+so older builds may hit it less often, but none of them is a safe rollback for edit persistence.
+
 ## Deploy-order after a DB wipe
 
 GoTrue (recreate `auth` schema) → AppFlowy-Cloud (fresh migrate) → Worker → Web → admin-frontend.
