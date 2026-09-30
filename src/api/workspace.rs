@@ -1530,6 +1530,11 @@ async fn move_page_handler(
 ) -> Result<Json<AppResponse<()>>> {
   let uid = state.user_cache.get_user_uid(&user_uuid).await?;
   let (workspace_uuid, view_id) = path.into_inner();
+  // SECURITY: moving pages is Owner-only; Members have Write but must not reorganize the workspace.
+  state
+    .workspace_access_control
+    .enforce_role_strong(&uid, &workspace_uuid, AFRole::Owner)
+    .await?;
   let user = realtime_user_for_web_request(req.headers(), uid)?;
   move_page(
     &state,
