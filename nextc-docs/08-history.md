@@ -346,6 +346,32 @@ Chronological log reconstructed from all project conversations. Dates are when t
   distinct from the (already-fixed) full-board "Untitled for minutes" cold-IndexedDB bug. See
   [06](06-known-issues-and-fixes.md).
 
+## Phase 14 — Card-edit-during-load fix, board-in-space move fix (2026-09-30)
+
+- **Closed the Phase 13 open issue** (brief post-load window where card edits/moves against
+  still-hydrating rows were silently dropped): measured on prod that `rowMap` stayed empty (0/136) for
+  ~4 s after board render. Web commit `5e66186b` — "fix: apply card edits made while the board is
+  still loading instead of dropping them" — adds `useResolveRowDoc`/`useWithRowDoc`, which wait for the
+  row doc (`ensureRow`) and its data (`ROW_DATA_READY_TIMEOUT_MS = 15000`) before applying, instead of
+  dropping immediately; wired into move/cell-edit/date-cell/row-meta/duplicate-row paths. Field-wide
+  ops (clear/duplicate/switch property) still skip unloaded rows — known limitation, unchanged.
+  Deployed as Railway `AppFlowy-Web` deployment `9a70fb02` (GitHub Actions run `36703140092`, SUCCESS,
+  2026-09-30 ~17:35 +07:00), live bundle `index-WcDiN_Fe.js`. An actual edit timed to land *during* the
+  loading window was not re-verified live post-deploy (unverified — needs a manual timed check).
+- **Found and fixed a second Owner-move-day regression, unrelated to the Owner-only gate:** "Move to"
+  was disabled for every board sitting directly in a space (Core Dating Board, Startup Project Board —
+  19 boards total). Root cause: `isLinkedDatabaseViewUnderDocument()` in
+  `src/application/view-utils.ts` misclassified space-parented boards (spaces are `Document`-layout
+  views too) as linked views embedded in a document. Fixed in web commit `c6edc1bd` — "fix: allow
+  moving databases that sit directly in a space" — plus a new unit test (79/79 passing in that file).
+  Deployed as Railway `AppFlowy-Web` deployment `86985d2d` (GitHub Actions run `36720064526`, SUCCESS,
+  2026-09-30 20:16:31 +07:00). Verified live as Owner `thanh@mingle.com` on CoreDating - Mingle2:
+  "Move to" enabled, target picker lists all 5 spaces.
+  - **Lesson:** the earlier same-day Owner-move verification (Phase 13) only exercised a Doc page
+    (Tips Sharing), which is why this board-specific regression was missed — test board pages too.
+- Full write-up, digests, and rollback caveats in [06](06-known-issues-and-fixes.md); deploy mechanics
+  in [02](02-railway-deployment.md).
+
 ## Standing constraints carried throughout
 
 - No broad Railway↔GitHub access (only `nextc/AppFlowy-Cloud`).

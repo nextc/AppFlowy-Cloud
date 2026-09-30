@@ -174,11 +174,35 @@ first since the web change depends on the server enforcing it.
 - **Web:** same tag `compat-cloud-0.9.64`, two redeploys the same day: `516e8320` (14:12 +07:00,
   commit `458f8e4a` — checklist onBlur fix, GitHub Actions run `36682159134`, bundle
   `index-DLqcuVjZ.js`), then `3281e4a7` (14:51 +07:00, commit `bbd5ea7c` — Owner-only move gating,
-  GitHub Actions run `36684546174`, bundle `index-DSRaTnPM.js`). Image digest for `bbd5ea7c`
-  *(unverified — not recorded)*. **Rollback to the pre-2026-09-30 build:**
+  GitHub Actions run `36684546174`, bundle `index-DSRaTnPM.js`). Image digest for `bbd5ea7c`:
+  `sha256:5445e018d69e4ac9c6b67055dc5d0017f4d786344cc9374f9471215744296ad9` (confirmed later the same
+  day as the rollback target for the redeploy below). **Rollback to the pre-2026-09-30 build:**
   `ghcr.io/nextc/appflowy_web@sha256:3bc96f915acf944a874462bbd0ffdc7b933c95f27220e3938659df5b8cd61a38`
   (commit `458f8e4a`, deployment `516e8320`) — carries the checklist fix but **not** the move-gating
   UI (see [06](06-known-issues-and-fixes.md) for the caveat).
+
+**2026-09-30 redeploy — card edits dropped during board load, fixed:** live diagnosis (closing a Phase
+13 open issue, see [06](06-known-issues-and-fixes.md)) found that cards edited/moved during the
+~2–14 s window while a board's row docs are still hydrating had their edits silently dropped. The
+`compat-cloud-0.9.64` tag was rebuilt again (commit `5e66186b` — "fix: apply card edits made while the
+board is still loading instead of dropping them") via `build-oss-web.yml` run `36703140092` and pushed
+to the **same** tag; `railway redeploy --service AppFlowy-Web --from-source -y` picked it up as Railway
+deployment `9a70fb02` (SUCCESS, 2026-09-30 ~17:35 +07:00). Live bundle `index-WcDiN_Fe.js`. This
+**supersedes and removes** the `bbd5ea7c` build above. **Rollback to the pre-fix build:**
+`ghcr.io/nextc/appflowy_web@sha256:5445e018d69e4ac9c6b67055dc5d0017f4d786344cc9374f9471215744296ad9`
+(commit `bbd5ea7c`, deployment `3281e4a7`) — reintroduces the drop-on-load bug.
+
+**2026-09-30 redeploy — "Move to" fixed for boards sitting directly in a space:** a tester found "Move
+to" disabled for every board in two spaces (Core Dating Board, Startup Project Board — 19 boards
+total), unrelated to the Owner-only gate (see [06](06-known-issues-and-fixes.md)). The
+`compat-cloud-0.9.64` tag was rebuilt again (commit `c6edc1bd` — "fix: allow moving databases that sit
+directly in a space") via `build-oss-web.yml` run `36720064526` and pushed to the **same** tag;
+`railway redeploy --service AppFlowy-Web --from-source -y` picked it up as Railway deployment
+`86985d2d` (SUCCESS, 2026-09-30 20:16:31 +07:00 / 2026-09-30T13:16:31Z). This **supersedes and
+removes** the `5e66186b` build above. **Rollback to the pre-fix build:** redeploy the `5e66186b` image
+(digest *(unverified — needs check)*) or fall back further to
+`ghcr.io/nextc/appflowy_web@sha256:5445e018d69e4ac9c6b67055dc5d0017f4d786344cc9374f9471215744296ad9`
+(commit `bbd5ea7c`, deployment `3281e4a7`) — both reintroduce this bug.
 
 Full bug/verification detail in [06](06-known-issues-and-fixes.md); build/deploy recipe in
 [07](07-operations-runbook.md).

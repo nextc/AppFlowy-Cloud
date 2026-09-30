@@ -728,6 +728,11 @@ actor snapshots **only** if a websocket session is attached; cold HTTP writes ar
     (commit `458f8e4a`, deployment `516e8320`). **Caveat:** this rollback target lacks the Owner-move
     UI gating (no toast, "Move to" visible to everyone) — the server (if not also rolled back) would
     still refuse the write, so a Member would see the move silently fail.
+- **Correction (2026-09-30, later same day):** the live verification above only exercised a Doc page
+  (Tips Sharing) — it did not catch that "Move to" was independently disabled for boards placed
+  directly in a space (Core Dating Board, Startup Project Board), an unrelated pre-existing bug. See
+  "'Move to' greyed out for boards placed directly in a space — FIXED" below, fixed same day in web
+  commit `c6edc1bd`.
 
 ## Checklist sub-task with a typed description silently discarded on blur — FIXED (2026-09-30)
 
@@ -758,17 +763,65 @@ actor snapshots **only** if a websocket session is attached; cold HTTP writes ar
 - **Fix:** removed the duplicate (index-4) entry from `row_orders` via a database-collab
   `web-update`. Both views now report 136 rows with no duplicates.
 
-## Open issue: brief post-load window where cards read "Untitled" and silently drop edits
+## Brief post-load window where cards read "Untitled" and silently drop edits — FIXED (2026-09-30)
 
 - **Observed:** after a warm load, cards render "Untitled" with empty statuses for roughly 2–3
   seconds (up to ~14 s on a cold load) before row content finishes hydrating. During that window,
-  card moves and cell edits made against those still-hydrating rows are **silently dropped**:
-  `useUpdateCellDispatch` returns early with a `Log.warn` when the row isn't yet in `rowMap`, and
-  `useMoveCardDispatch` throws "Unable to reorder card."
-- **Distinct from the fixed "Untitled for minutes" bug** (see "Boards show 'Untitled' cards for
+  card moves and cell edits made against those still-hydrating rows were **silently dropped**:
+  `useUpdateCellDispatch` returned early with a `Log.warn` when the row wasn't yet in `rowMap`, and
+  `useMoveCardDispatch` threw "Unable to reorder card." Logged as an open issue earlier the same day
+  (Phase 13, see [08](08-history.md)).
+- **Distinct from the earlier-fixed "Untitled for minutes" bug** (see "Boards show 'Untitled' cards for
   minutes on first visit" above, fixed 2026-09-04) — that entry was full-board hydration taking
-  minutes on a cold IndexedDB; this is a much shorter per-load window that is still present after that
-  fix and is **not currently fixed**.
+  minutes on a cold IndexedDB; this was a much shorter per-load window that survived that fix.
+- **Measured root cause:** after board render, `rowMap` stayed empty (0/136) for ~4 s while every
+  per-card write path that read `rowMap?.[rowId]` returned early or threw.
+- **Fix:** web commit `5e66186b` — "fix: apply card edits made while the board is still loading
+  instead of dropping them" (`src/application/database-yjs/dispatch.ts`, +194/-112 lines). New
+  `useResolveRowDoc`/`useWithRowDoc` helpers: if a row doc isn't loaded yet, the edit now waits for the
+  row doc (`ensureRow`) and for its row data to arrive (`ROW_DATA_READY_TIMEOUT_MS = 15000`), then
+  applies; on timeout it logs a warning and drops (unchanged fallback). Wired into
+  `useMoveCardDispatch`, `useUpdateCellDispatch`, `useUpdateStartEndTimeCell`,
+  `useUpdateRowMetaDispatch`, and `useDuplicateRowDispatch`.
+- **Known limitation (unchanged):** field-wide ops (clear cells in a field, duplicate property, switch
+  property type) still skip rows that aren't loaded yet.
+- **Build/deploy:** GitHub Actions `build-oss-web.yml` run `36703140092`, pushed to the
+  `compat-cloud-0.9.64` tag; `railway redeploy --service AppFlowy-Web --from-source -y` picked it up as
+  Railway deployment `9a70fb02` (SUCCESS, 2026-09-30 ~17:35 +07:00). Live entry bundle
+  `index-WcDiN_Fe.js` contains the new code (confirmed).
+- **Not verified live:** an actual drag/edit performed *during* the "Untitled" window — timing this
+  precisely via browser automation wasn't practical *(unverified — needs a manual timed check)*.
+- **Rollback:** `ghcr.io/nextc/appflowy_web@sha256:5445e018d69e4ac9c6b67055dc5d0017f4d786344cc9374f9471215744296ad9`
+  (commit `bbd5ea7c`, deployment `3281e4a7`) — pre-fix, reintroduces the drop-on-load bug; carries the
+  Owner-move gating but not the board-in-space move fix below.
+
+## "Move to" greyed out for boards placed directly in a space — FIXED (2026-09-30)
+
+- **Symptom (tester report):** "Move to" in the page header "…" menu was disabled/greyed out for
+  every board in the Core Dating Board space (4 boards) and Startup Project Board space (15 boards) —
+  even for Owners — after the Owner-move gating shipped the same day.
+- **Root cause:** unrelated to the Owner-only gate above (that one *hides* the menu item for
+  non-Owners rather than disabling it). `src/application/view-utils.ts`'s
+  `isLinkedDatabaseViewUnderDocument()` treats a database view whose parent has layout `Document` and
+  no `extra.is_database_container` flag as a linked database view embedded inside a document (and
+  therefore not independently movable). Spaces are also `Document`-layout views (flagged
+  `extra.is_space = true`), and these boards have no `is_database_container` flag, so `canBeMoved()`
+  returned `false` for any board sitting directly in a space.
+- **Fix:** web commit `c6edc1bd` — "fix: allow moving databases that sit directly in a space" —
+  `isLinkedDatabaseViewUnderDocument()` now returns `false` (not embedded) whenever
+  `parentView.extra?.is_space` is set. Added a unit test in
+  `src/application/__tests__/view-utils.test.ts`; 79/79 tests in that file pass.
+- **Build/deploy:** GitHub Actions `build-oss-web.yml` run `36720064526` (checkout at `c6edc1bd`),
+  pushed to the `compat-cloud-0.9.64` tag; `railway redeploy --service AppFlowy-Web --from-source -y`
+  picked it up as Railway deployment `86985d2d` (SUCCESS, 2026-09-30 20:16:31 +07:00 /
+  2026-09-30T13:16:31Z).
+- **Verified live:** as Owner `thanh@mingle.com` on CoreDating - Mingle2, "Move to" is enabled and the
+  target picker opens listing all 5 spaces (no move actually performed).
+- **Lesson:** the Owner-move live verification above used a Doc page (Tips Sharing), not a board —
+  that's why this regression was missed; test board pages specifically going forward.
+- **Rollback:** redeploy the `5e66186b` image (digest *(unverified — needs check)*) or fall back
+  further to `ghcr.io/nextc/appflowy_web@sha256:5445e018d69e4ac9c6b67055dc5d0017f4d786344cc9374f9471215744296ad9`
+  (commit `bbd5ea7c`, deployment `3281e4a7`) — either reintroduces this bug for boards in spaces.
 
 ---
 
