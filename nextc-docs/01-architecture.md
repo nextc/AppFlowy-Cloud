@@ -46,10 +46,12 @@ timeout), `#1464` (old-client init_sync loop), `#1465` (CollabParams) are all **
 3. **`ghcr.io/nextc/appflowy_web:compat-cloud-0.9.64`** (2026-09-04, current) — self-built from a
    `nextc/AppFlowy-Web` branch pinned to the last commit (`d0704de2`) before upstream broke
    compatibility with cloud `0.9.64`'s folder API (commit `c8f44099`, see
-   [06](06-known-issues-and-fixes.md)). Carries the Owner-only delete gating and new features
-   (shareable card URLs, hidden-fields-expanded-by-default) that stock `0.9.93` doesn't have. Full
-   detail in [06](06-known-issues-and-fixes.md) and [08 §Phase 9](08-history.md). **Rollback:**
-   reconnect `appflowyinc/appflowy_web:0.9.93`.
+   [06](06-known-issues-and-fixes.md)). Carries the Owner-only delete gating, Owner-only move gating
+   (added 2026-09-30, commit `bbd5ea7c`), and new features (shareable card URLs,
+   hidden-fields-expanded-by-default) that stock `0.9.93` doesn't have. Full detail in
+   [06](06-known-issues-and-fixes.md) and [08 §Phase 9](08-history.md). **Rollback:** reconnect
+   `appflowyinc/appflowy_web:0.9.93` — note this stock image has **neither** the delete nor the move
+   Owner-only UI gating (server-side guards still apply if the Cloud image isn't also rolled back).
 
 **Why tag `0.9.64` and not `main`:** `main` HEAD = `0.9.64 + ~76 untagged commits` — no same-day web
 image exists for it, so its collab-protocol pairing is unknowable. An earlier prod that ran OSS cloud

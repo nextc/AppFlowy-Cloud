@@ -156,6 +156,33 @@ target. Every earlier compat build also contains the racy code: `cache/index.ts`
 `sha256:43782e958d901f66ea4860f79bd3518edd0db73879411f200cd6143ae6f8fa59`). The race depends on timing,
 so older builds may hit it less often, but none of them is a safe rollback for edit persistence.
 
+**2026-09-30 — Owner-only page-move gating (Cloud + Web):** two service switches, deployed Cloud
+first since the web change depends on the server enforcing it.
+
+- **Cloud:** built from `nextc/AppFlowy-Cloud` commit `44219d40` via `build-oss.yml` run
+  `36684420913` → `ghcr.io/nextc/appflowy-cloud:0.9.64-owner-move` digest
+  `sha256:ee1519394a158546e34f8c3c2ac0132cbc22167a1ca4e3844005591e9150da89`.
+  ```bash
+  railway service source connect --image ghcr.io/nextc/appflowy-cloud:0.9.64-owner-move --service AppFlowy-Cloud
+  railway redeploy --service AppFlowy-Cloud
+  ```
+  Railway deployment `f8dd443b` (SUCCESS, 2026-09-30 14:50 +07:00). Only the `appflowy-cloud` image
+  was switched (the `worker`/`admin-frontend` images from the same run were built but not deployed).
+  **Rollback:** `ghcr.io/nextc/appflowy-cloud:0.9.64-delete-guardrail`
+  `sha256:b4373228b6da40e03143c0e6e6b3d6869e42a26c6ba61ffd0baf4e943769d9aa` (previous deployment
+  `7b3d4b0a`).
+- **Web:** same tag `compat-cloud-0.9.64`, two redeploys the same day: `516e8320` (14:12 +07:00,
+  commit `458f8e4a` — checklist onBlur fix, GitHub Actions run `36682159134`, bundle
+  `index-DLqcuVjZ.js`), then `3281e4a7` (14:51 +07:00, commit `bbd5ea7c` — Owner-only move gating,
+  GitHub Actions run `36684546174`, bundle `index-DSRaTnPM.js`). Image digest for `bbd5ea7c`
+  *(unverified — not recorded)*. **Rollback to the pre-2026-09-30 build:**
+  `ghcr.io/nextc/appflowy_web@sha256:3bc96f915acf944a874462bbd0ffdc7b933c95f27220e3938659df5b8cd61a38`
+  (commit `458f8e4a`, deployment `516e8320`) — carries the checklist fix but **not** the move-gating
+  UI (see [06](06-known-issues-and-fixes.md) for the caveat).
+
+Full bug/verification detail in [06](06-known-issues-and-fixes.md); build/deploy recipe in
+[07](07-operations-runbook.md).
+
 ## Deploy-order after a DB wipe
 
 GoTrue (recreate `auth` schema) → AppFlowy-Cloud (fresh migrate) → Worker → Web → admin-frontend.

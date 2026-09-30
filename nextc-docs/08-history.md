@@ -309,6 +309,43 @@ Chronological log reconstructed from all project conversations. Dates are when t
 - Full write-up in [06](06-known-issues-and-fixes.md); deploy mechanics in
   [02](02-railway-deployment.md).
 
+## Phase 13 — Owner-only page-move gating, checklist-blur fix, data fixes (2026-09-30)
+
+- **Extended the 2026-07-25 delete guardrail (Phase 8) to page moves:** the workspace Owner asked
+  that only Owners be able to move pages between spaces/parents, matching the existing "Members can
+  edit but not delete" model. Verified beforehand that any Member could move a page (`POST
+  .../page-view/{view}/move` as Member `thanh+1` → `200`). Confirmed current Owners are
+  `thanh@mingle.com` and `bao.pham@mingle.com` from `af_workspace_member`/`af_roles`; all other
+  members are `Member`.
+  - **Cloud** commit `44219d40` adds `enforce_role_strong(AFRole::Owner)` to `move_page_handler`,
+    mirroring the delete-guardrail pattern (5-line diff over `0.9.64-delete-guardrail`). Built as tag
+    `0.9.64-owner-move`, deployed to `AppFlowy-Cloud` (Railway deployment `f8dd443b`, SUCCESS,
+    2026-09-30 14:50 +07:00) — deployed **before** the web change per the new Cloud-before-Web
+    ordering rule (see [07](07-operations-runbook.md)).
+  - **Web** commit `bbd5ea7c` on `compat-cloud-0.9.64` adds `useCanMoveContent()`, refuses the move
+    client-side with a toast for non-Owners, hides "Move to" in the page header menu, and turns the
+    space picker into a read-only label for non-Owners. Deployed as Railway deployment `3281e4a7`
+    (SUCCESS, 2026-09-30 14:51 +07:00).
+  - Verified live: Member move → `code:1012` "User does not have permissions…", unmoved; Owner move
+    worked and the test page was restored to its original position.
+  - A tester report of "can't move board" turned out to be page-move, now blocked for Members by
+    design; investigating a similar report from Owner `bao.pham` surfaced repeated `ExpiredSignature`
+    WS auth failures in the Cloud logs (whose session is unverified) — advised re-login.
+  - Full write-up, digests, and rollback caveats in [06](06-known-issues-and-fixes.md) and
+    [02](02-railway-deployment.md).
+- **Checklist sub-task description discarded on blur — fixed:** `NewTask.tsx`'s `onBlur` only hid the
+  input instead of submitting it, silently losing typed sub-task descriptions (Enter and the `+`
+  button both worked correctly). Fixed in web commit `458f8e4a` — onBlur now creates the task if text
+  was typed; Escape still discards. Deployed as Railway deployment `516e8320` (SUCCESS, 2026-09-30
+  14:12 +07:00), ahead of the move-gating deploy above. See [06](06-known-issues-and-fixes.md).
+- **Data fix:** the Mingle2 board view had card `e1673d42` listed twice in `row_orders` (rendered
+  twice on the board) — likely from concurrent card moves (unverified). Removed the duplicate entry
+  via a database-collab web-update; both the board and grid views now agree at 136 rows.
+- **New open issue logged (not fixed):** a short post-load window (~2–3 s warm, up to ~14 s cold)
+  where cards still show "Untitled" and moves/cell-edits against those rows are silently dropped —
+  distinct from the (already-fixed) full-board "Untitled for minutes" cold-IndexedDB bug. See
+  [06](06-known-issues-and-fixes.md).
+
 ## Standing constraints carried throughout
 
 - No broad Railway↔GitHub access (only `nextc/AppFlowy-Cloud`).

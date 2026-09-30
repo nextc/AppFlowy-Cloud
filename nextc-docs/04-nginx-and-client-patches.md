@@ -100,6 +100,12 @@ Behavior:
   (`move_to_trash`, `delete_page_from_trash`, `delete_all_pages_from_trash`, `delete_collab`). CRDT
   deletes (kanban row/list/field) have no server equivalent and are guarded by this client-side hide.
 
+> **Related but separate (2026-09-30):** page **moves** (dragging/relocating a page between spaces or
+> parents) are also now Owner-only, but that gating is **not** an nginx patch — it ships natively in
+> the `compat-cloud-0.9.64` web build's own code (`useCanMoveContent()`), because this build already
+> carries source-level Owner gating rather than needing a `sub_filter` injection. See
+> [06](06-known-issues-and-fixes.md) for the full write-up.
+
 ## Patch 5 — Card-detail hidden fields expanded by default (2026-09-03) — **RETIRED (inert) 2026-09-04**
 
 > **Retired-in-code:** the 2026-09-04 web deploy (`ghcr.io/nextc/appflowy_web:compat-cloud-0.9.64`,

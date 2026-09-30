@@ -40,16 +40,27 @@ edit `scratchpad/nginx_new4.conf` → `docker … nginx -t` (substitute `__RESOL
 
 ## Rebuild the OSS images (new version)
 
-1. In `nextc/AppFlowy-Cloud`, ensure the target git tag exists.
-2. Run the GitHub Action `build-oss.yml` (`workflow_dispatch`, input `ref` = the tag). Runners are
-   amd64; images push to `ghcr.io/nextc/{appflowy-cloud,appflowy-worker,admin-frontend}:<ref>`.
-3. Point services at the new tag:
+1. In `nextc/AppFlowy-Cloud`, commit the change and push a tag for it (e.g. `0.9.64-<change-name>`).
+2. Run the GitHub Action `build-oss.yml` (`workflow_dispatch`, input `ref` = the tag) — either from
+   the dashboard, or via CLI:
    ```bash
-   railway service source connect --image ghcr.io/nextc/appflowy-cloud:<ref> --service AppFlowy-Cloud
-   railway redeploy --service AppFlowy-Cloud --from-source
+   gh workflow run build-oss.yml -R nextc/AppFlowy-Cloud -f ref=<tag>
    ```
+   Runners are amd64; builds all three images (`appflowy-cloud`, `appflowy-worker`,
+   `admin-frontend`) in parallel, roughly 5–16 minutes depending on image, and pushes to
+   `ghcr.io/nextc/{appflowy-cloud,appflowy-worker,admin-frontend}:<tag>` (public GHCR).
+3. Point the service(s) that actually need the new tag at it — you don't have to deploy all three
+   images every time (e.g. the 2026-09-30 owner-move change only redeployed `AppFlowy-Cloud`):
+   ```bash
+   railway service source connect --image ghcr.io/nextc/appflowy-cloud:<tag> --service AppFlowy-Cloud
+   railway redeploy --service AppFlowy-Cloud --yes
+   ```
+   Expect a brief client reconnect on the redeploy.
    **Remember the version-pairing rule** ([01](01-architecture.md)) — bump gotrue/web to the
    **same-release-date** tags, not matching numbers. Don't bump one image casually.
+   **Ordering rule:** when a change touches both server enforcement and client UI for the same
+   feature (e.g. a new role-gate), **deploy Cloud before Web** — the web change should assume the
+   server guard is already live, not the other way around.
 
 ## Deploy a custom web image (advanced)
 

@@ -670,6 +670,108 @@ actor snapshots **only** if a websocket session is attached; cold HTTP writes ar
 
 ---
 
+## Owner-only move guardrail — Members can no longer move pages between spaces (2026-09-30)
+
+- **Motivation:** extends the 2026-07-25 delete guardrail (above) — the workspace Owner asked that
+  only Owners be able to **move** pages between spaces/parents, not just delete. Before this change
+  any Member could move any page: verified 2026-09-30 by calling `POST
+  /api/workspace/{ws}/page-view/{view}/move` as a test Member (`thanh+1@mingle.com`) → `200 {code:0}`.
+- **Current Owners:** `thanh@mingle.com` and `bao.pham@mingle.com` (verified from
+  `af_workspace_member`/`af_roles` 2026-09-30). Every other member, including `thanh+1@mingle.com`, is
+  `Member`.
+- **Server:** AppFlowy-Cloud commit `44219d40` — "feat: gate move-page endpoint on Owner role" — adds
+  `enforce_role_strong(&uid, &workspace_uuid, AFRole::Owner)` to `move_page_handler`
+  (`src/api/workspace.rs`), mirroring the existing delete-guardrail pattern. Tag
+  `0.9.64-owner-move` (= `44219d40`); the only code diff vs tag `0.9.64-delete-guardrail` is this
+  5-line change (everything else in the diff is `nextc-docs`).
+- **Web:** `nextc/AppFlowy-Web` branch `compat-cloud-0.9.64` commit `bbd5ea7c` — "feat: restrict
+  moving pages to workspace Owners":
+  - New `useCanMoveContent()` hook (Owner-only) in `AuthInternalContext.ts`.
+  - `usePageOperations.movePage` refuses non-Owners client-side and shows a toast: *"Only workspace
+    owners can move pages."*
+  - "Move to" is hidden from `MoreActionsContent` (the page header "…" menu) for non-Owners.
+  - The `ViewModal` space picker renders as a plain, non-interactive label for non-Owners instead of a
+    dropdown.
+  - `tsc` clean (non-test), `eslint` 0 errors.
+- **UX fact:** "Move to" only exists in the page header "…" menu and the page view modal on this
+  build — the sidebar "…" menu has no "Move to" entry, and this web build has no sidebar
+  drag-and-drop for pages.
+- **Build/deploy (Cloud):** GitHub Actions `build-oss.yml` on `nextc/AppFlowy-Cloud`, run
+  `36684420913` (success; `appflowy-cloud` 15m6s, `appflowy-worker` 15m29s, `admin-frontend` 4m46s) →
+  `ghcr.io/nextc/appflowy-cloud:0.9.64-owner-move` digest
+  `sha256:ee1519394a158546e34f8c3c2ac0132cbc22167a1ca4e3844005591e9150da89`. Railway
+  `AppFlowy-Cloud` switched via `railway service source connect --image
+  ghcr.io/nextc/appflowy-cloud:0.9.64-owner-move --service AppFlowy-Cloud` + `railway redeploy`;
+  deployment `f8dd443b` SUCCESS (2026-09-30 14:50 +07:00). Only the `appflowy-cloud` service image
+  was switched — the `worker`/`admin-frontend` images from the same run were built but not deployed.
+- **Deploy (Web):** two deployments the same day — `516e8320` (14:12 +07:00, commit `458f8e4a`, the
+  checklist-blur fix below, bundle `index-DLqcuVjZ.js`) then `3281e4a7` (14:51 +07:00, commit
+  `bbd5ea7c`, bundle `index-DSRaTnPM.js`). Web image digest for `bbd5ea7c` *(unverified — not
+  recorded)*. Full deploy mechanics in [02](02-railway-deployment.md).
+- **Verification (live, 2026-09-30):** Member `thanh+1` move → HTTP 200 body `{code:1012, message:
+  "User does not have permissions to execute this action"}`, page unmoved. Owner move to QC and back
+  → `code:0`; test page "Note for bundle/package ID" (view `92415f2c…`) restored to its original
+  position in Tips Sharing. Live web entry bundle `index-DSRaTnPM.js` contains the string "Only
+  workspace owners can move pages." **Not checked:** the Member-side UI hiding was not visually
+  confirmed (no Member browser session available) — tag as *(unverified — visually)*.
+- **Related report investigated, not a bug:** a tester reported "can't move board," which turned out
+  to mean moving a **page** between sidebar spaces (not cards). Owner moves worked in testing; under
+  the new spec, Member moves are blocked **by design**. `bao.pham` is an Owner — if he still can't
+  move pages, Cloud logs around the same window showed repeated `ExpiredSignature` WS auth failures
+  from some client every 2–4 minutes (whose session is *(unverified)*) — the actionable next step is
+  to ask him to re-login.
+- **Rollbacks:**
+  - Cloud → `ghcr.io/nextc/appflowy-cloud:0.9.64-delete-guardrail`
+    `sha256:b4373228b6da40e03143c0e6e6b3d6869e42a26c6ba61ffd0baf4e943769d9aa` (previous deployment
+    `7b3d4b0a`) — Members can move pages again.
+  - Web → `ghcr.io/nextc/appflowy_web@sha256:3bc96f915acf944a874462bbd0ffdc7b933c95f27220e3938659df5b8cd61a38`
+    (commit `458f8e4a`, deployment `516e8320`). **Caveat:** this rollback target lacks the Owner-move
+    UI gating (no toast, "Move to" visible to everyone) — the server (if not also rolled back) would
+    still refuse the write, so a Member would see the move silently fail.
+
+## Checklist sub-task with a typed description silently discarded on blur — FIXED (2026-09-30)
+
+- **Symptom (tester):** "can't create a sub-task with a description" — typing a description into the
+  new-sub-task input then clicking elsewhere made the typed text vanish; nothing was created.
+- **Root cause:** `NewTask.tsx`'s `onBlur` only called `setShowCreateInput(false)` (hid the input) —
+  it never submitted the typed text. Pressing **Enter** or clicking the **+** button did work
+  (verified live: created "sub1" via Enter and "sub2" via the + button on test card
+  `44941408…`, both persisted server-side) — only the blur path silently discarded input.
+- **Fix:** web commit `458f8e4a` — "fix: create checklist task on blur instead of discarding typed
+  text" — `onBlur` now calls `onCreateTask` when the input has text. **Escape still discards** the
+  input (unchanged, intentional).
+- **Deploy:** Railway `AppFlowy-Web` deployment `516e8320` (2026-09-30 14:12 +07:00, GitHub Actions
+  run `36682159134`, bundle `index-DLqcuVjZ.js`). Superseded same day by deployment `3281e4a7` (the
+  Owner-move deploy above) — both fixes are live in the current build.
+- **Verification:** the create-on-Enter and create-on-+ paths were verified live pre-fix; the
+  onBlur-submits-text behavior itself was **not** re-tested live after deploy *(unverified — needs a
+  live check: type a description, click away, confirm the sub-task is created)*.
+
+## Data fix: duplicate card in Mingle2 board view row_orders (2026-09-30)
+
+- **Symptom:** on the Mingle2 board, card "Messages — Add an Photo library permission popup…" (row
+  `e1673d42`) rendered **twice**.
+- **Root cause:** the board view's `row_orders` (view `19ee2ad7…`) listed `e1673d42` at both index 4
+  and its normal position — 137 entries vs 136 in the paired grid view (`e0ac14cf`). Likely cause:
+  concurrent moves of the same card (a Yjs array move is delete+insert, and two concurrent inserts can
+  both survive) *(likely, unverified)*.
+- **Fix:** removed the duplicate (index-4) entry from `row_orders` via a database-collab
+  `web-update`. Both views now report 136 rows with no duplicates.
+
+## Open issue: brief post-load window where cards read "Untitled" and silently drop edits
+
+- **Observed:** after a warm load, cards render "Untitled" with empty statuses for roughly 2–3
+  seconds (up to ~14 s on a cold load) before row content finishes hydrating. During that window,
+  card moves and cell edits made against those still-hydrating rows are **silently dropped**:
+  `useUpdateCellDispatch` returns early with a `Log.warn` when the row isn't yet in `rowMap`, and
+  `useMoveCardDispatch` throws "Unable to reorder card."
+- **Distinct from the fixed "Untitled for minutes" bug** (see "Boards show 'Untitled' cards for
+  minutes on first visit" above, fixed 2026-09-04) — that entry was full-board hydration taking
+  minutes on a cold IndexedDB; this is a much shorter per-load window that is still present after that
+  fix and is **not currently fixed**.
+
+---
+
 ## Deploy / tooling gotchas (quick list)
 
 - `railway up` from an **unlinked** dir creates a **stray project** — always `railway link -p … -s …`
