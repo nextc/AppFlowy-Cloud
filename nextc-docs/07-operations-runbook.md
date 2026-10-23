@@ -36,6 +36,8 @@ The JWT secret and MinIO keys live in one place (GoTrue / MinIO); every consumer
 - **ops@mgvlabs.com password:** neither GoTrue nor Cloud reads `GOTRUE_ADMIN_PASSWORD`; change the user
   itself with `PUT /gotrue/admin/users/{id}` (service-role JWT), then update the env var as a record.
   `GET /admin/users` returns 0 users with a service-role token (audience filter), so get the id another way.
+- **Redis:** set `Redis.REDIS_PASSWORD`; `REDIS_URL` is built from it, and Cloud/Worker/admin-frontend reference
+  `${{Redis.REDIS_URL}}`. Redeploy Redis first, then the three clients (data persists in `/data`).
 - **Brevo:** create the key in Brevo, set `email-hook.BREVO_API_KEY`, redeploy email-hook, then revoke the old key.
 
 ## Change the member-management UI password

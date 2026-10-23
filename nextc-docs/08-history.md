@@ -376,7 +376,8 @@ Chronological log reconstructed from all project conversations. Dates are when t
 
 - Rotated: GoTrue JWT secret (now referenced by Cloud, Worker, provisioner, admin-ui), the email-hook
   signing secret (both sides), MinIO root credentials = S3 keys (Cloud/Worker now reference MinIO),
-  admin-ui password, and the `ops@mgvlabs.com` password (via GoTrue admin API).
+  admin-ui password, the `ops@mgvlabs.com` password (via GoTrue admin API), the Brevo API key, and the
+  Redis password (clients now reference `${{Redis.REDIS_URL}}`).
 - `minio/minio:latest` was no longer pullable → MinIO moved to `pgsty/minio:RELEASE.2026-08-04T00-00-00Z`.
 - Removed the public `/minio/` console route from nginx (`nginx.live.conf` updated).
 - Removed the plaintext admin-ui password from these docs (it was pushed to the public fork).

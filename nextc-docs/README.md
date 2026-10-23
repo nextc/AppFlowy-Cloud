@@ -83,7 +83,8 @@ management UI** (our `admin-ui` service), **signup domain restriction** (a Postg
 | Email-hook signing secret | `email-hook.HOOK_SECRET` = the part after `whsec_` in `GoTrue.GOTRUE_HOOK_SEND_EMAIL_SECRETS` |
 | Super-admin login | `ops@mgvlabs.com` + `GoTrue.GOTRUE_ADMIN_PASSWORD` |
 | Member-management UI password | `admin-ui.ADMIN_PASSWORD` (read it in Railway; never write it here) |
-| Brevo API key | `email-hook.BREVO_API_KEY` |
+| Brevo API key | `email-hook.BREVO_API_KEY` (sealed: unreadable via CLI/API) |
+| Redis | `Redis.REDIS_PASSWORD` (Cloud/Worker/admin-frontend reference `${{Redis.REDIS_URL}}`) |
 | Public domain | `Nginx.PUBLIC_HOST` = `b.mgvlabs.com` (single source; referenced everywhere) |
 
 ### Troubleshooting index (symptom → doc)
