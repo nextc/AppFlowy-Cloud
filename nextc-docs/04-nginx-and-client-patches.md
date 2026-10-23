@@ -15,7 +15,7 @@ without rebuilding it. Config is stored base64 in `NGINX_CONFIG_B64` (edit proce
 | `/minio-api/` | `__MINIO_HOST__:9000` | S3 API (strips prefix; unbuffered; large uploads) |
 | `/ai/` | `__CLOUD_HOST__:8000` | AI endpoints |
 | `/console` | `admin-frontend.railway.internal:3000` | Super-admin (forces `X-Forwarded-Proto https`) |
-| `/minio/` + `= /minio` redirect | `minio.railway.internal:9001` | MinIO console (strips prefix, ws upgrade) |
+| ~~`/minio/`~~ | — | **Removed 2026-10-23** (MinIO console was publicly reachable; the app only uses `/minio-api/`). `/minio/` now falls through to the web app. |
 | `= /billing/api/v1/subscriptions` | — (returns JSON) | **Billing spoof** (see below) |
 | `^~ /billing/api/v1/active-subscription/` | — (returns JSON) | **Billing spoof** |
 | `/` | `__WEB_HOST__:80` | Web SPA + client patches (billing/button/reload) |

@@ -62,7 +62,7 @@ management UI** (our `admin-ui` service), **signup domain restriction** (a Postg
 | **admin-frontend** | `ghcr.io/nextc/admin-frontend:0.9.64` (OSS Rust) | `/console` super-admin |
 | **pgvector** | `pgvector/pgvector:pg16` | Postgres (app + `auth` schema) |
 | **Redis** | official | Cache / pubsub |
-| **MinIO** | `minio/minio` (Dockerfile wrapper) | S3 storage + console |
+| **MinIO** | `pgsty/minio:RELEASE.2026-08-04T00-00-00Z` (since 2026-10-23; `minio/minio` no longer pullable) | S3 storage |
 | **email-hook** | Node (our `scratchpad/email-hook/`) | GoTrue email → Brevo HTTP API |
 | **provisioner** | Node (our `scratchpad/provisioner/`) | Auto-provision + auto-join + invite-accept |
 | **admin-ui** | Node/express (our `scratchpad/admin-ui/`) | Password-protected member management |
@@ -72,16 +72,17 @@ management UI** (our `admin-ui` service), **signup domain restriction** (a Postg
 - App: **https://b.mgvlabs.com**
 - Super-admin console: `https://b.mgvlabs.com/console`
 - Member management (ours): **https://admin-ui-production-8ea6.up.railway.app**
-- MinIO console: `https://b.mgvlabs.com/minio/`
 
 ### Where credentials live (never hard-code — all in Railway vars / reference vars)
 
 | Secret | Location |
 |--------|----------|
 | Postgres | `pgvector` service (`DATABASE_URL` / `DATABASE_URL_PRIVATE`) |
-| GoTrue JWT secret | `GoTrue.GOTRUE_JWT_SECRET` (referenced by provisioner/admin-ui) |
+| GoTrue JWT secret | `GoTrue.GOTRUE_JWT_SECRET` (referenced by Cloud, Worker, provisioner, admin-ui) |
+| MinIO / S3 keys | `MinIO.MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` (referenced by Cloud/Worker `APPFLOWY_S3_*`) |
+| Email-hook signing secret | `email-hook.HOOK_SECRET` = the part after `whsec_` in `GoTrue.GOTRUE_HOOK_SEND_EMAIL_SECRETS` |
 | Super-admin login | `ops@mgvlabs.com` + `GoTrue.GOTRUE_ADMIN_PASSWORD` |
-| Member-management UI password | `admin-ui.ADMIN_PASSWORD` = `mgv-team-2026` |
+| Member-management UI password | `admin-ui.ADMIN_PASSWORD` (read it in Railway; never write it here) |
 | Brevo API key | `email-hook.BREVO_API_KEY` |
 | Public domain | `Nginx.PUBLIC_HOST` = `b.mgvlabs.com` (single source; referenced everywhere) |
 

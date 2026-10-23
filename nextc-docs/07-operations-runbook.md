@@ -20,7 +20,23 @@ manual refresh is the fallback.
 ## Manage members (add / remove / change role)
 
 Use the member-management UI: **https://admin-ui-production-8ea6.up.railway.app**, password
-`mgv-team-2026`. Remove also blocks auto-rejoin (via `af_admin_excluded`); add re-allows.
+the `admin-ui.ADMIN_PASSWORD` Railway variable. Remove also blocks auto-rejoin (via `af_admin_excluded`); add re-allows.
+
+## Rotate secrets (done 2026-10-23 after the Railway security incident)
+
+Generate values locally and pass them straight to `railway variables --set … --skip-deploys`, never print them.
+The JWT secret and MinIO keys live in one place (GoTrue / MinIO); every consumer is a `${{…}}` reference.
+
+- **JWT:** set `GoTrue.GOTRUE_JWT_SECRET` → redeploy GoTrue, AppFlowy-Cloud, AppFlowy-Worker, provisioner, admin-ui together.
+  Signed-in clients recover through their refresh token (observed 2026-10-23).
+- **Email hook:** one random base64 value `X` → `email-hook.HOOK_SECRET=X` and
+  `GoTrue.GOTRUE_HOOK_SEND_EMAIL_SECRETS=v1,whsec_X` → redeploy both.
+- **MinIO:** set `MinIO.MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` → redeploy MinIO, then Cloud + Worker.
+  Check inside the container: `mc alias set n http://127.0.0.1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"`.
+- **ops@mgvlabs.com password:** neither GoTrue nor Cloud reads `GOTRUE_ADMIN_PASSWORD`; change the user
+  itself with `PUT /gotrue/admin/users/{id}` (service-role JWT), then update the env var as a record.
+  `GET /admin/users` returns 0 users with a service-role token (audience filter), so get the id another way.
+- **Brevo:** create the key in Brevo, set `email-hook.BREVO_API_KEY`, redeploy email-hook, then revoke the old key.
 
 ## Change the member-management UI password
 

@@ -834,6 +834,13 @@ actor snapshots **only** if a websocket session is attached; cold HTTP writes ar
 - `railway redeploy` on a `railway up` source service triggers a full rebuild each time.
 - bitnami/minio won't deploy on Railway → use official `minio/minio` with a Dockerfile wrapper:
   `CMD ["minio","server","/data","--console-address",":9001"]`.
+- **2026-10-23: `minio/minio:latest` can no longer be pulled** (Docker Hub: tag not found) → MinIO
+  deploys fail with **no build/deploy logs**. Switched the service image to
+  `pgsty/minio:RELEASE.2026-08-04T00-00-00Z`; it mounted the existing `/data` volume cleanly
+  (383 objects / 1.3 GiB intact).
+- **A deploy that fails with empty logs:** read the real error from deployment events:
+  `railway api 'query { deploymentEvents(id:"<id>"){ edges { node { step payload { error } } } } }'`.
+- `railway redeploy` replays the old deployment snapshot; `--from-source` pulls the source fresh.
 - GoTrue needs both `DATABASE_URL` **and** `GOTRUE_DATABASE_URL` + `API_EXTERNAL_URL`; cloud
   migrations require GoTrue's `auth` schema to exist **first** (deploy order matters).
 - `generate_link type=magiclink` upserts → duplicate-key 500 on existing users; `type=recovery` → 404

@@ -70,7 +70,7 @@ Chronological log reconstructed from all project conversations. Dates are when t
   (password-protected). User chose **"Auto-join everyone (fully automatic)"** for onboarding →
   provisioner `ensureSharedInvites()` + shared workspace. Resolved auto-join-vs-remove with
   `af_admin_excluded`.
-- User: "change the admin password to `mgv-team-2026`" → done + verified.
+- User: "change the admin-ui password" → done + verified (value lives only in Railway; rotated 2026-10-23 after the Railway security incident).
 
 ## Phase 5 — First-login polish + on-demand provisioning (2026-07-07)
 
@@ -371,6 +371,17 @@ Chronological log reconstructed from all project conversations. Dates are when t
     (Tips Sharing), which is why this board-specific regression was missed — test board pages too.
 - Full write-up, digests, and rollback caveats in [06](06-known-issues-and-fixes.md); deploy mechanics
   in [02](02-railway-deployment.md).
+
+## Phase 15 — Secret rotation after the Railway security incident (2026-10-23)
+
+- Rotated: GoTrue JWT secret (now referenced by Cloud, Worker, provisioner, admin-ui), the email-hook
+  signing secret (both sides), MinIO root credentials = S3 keys (Cloud/Worker now reference MinIO),
+  admin-ui password, and the `ops@mgvlabs.com` password (via GoTrue admin API).
+- `minio/minio:latest` was no longer pullable → MinIO moved to `pgsty/minio:RELEASE.2026-08-04T00-00-00Z`.
+- Removed the public `/minio/` console route from nginx (`nginx.live.conf` updated).
+- Removed the plaintext admin-ui password from these docs (it was pushed to the public fork).
+- Edge-log review Oct 19 → Oct 23: only team traffic plus generic scanners; no hits on GoTrue admin,
+  `/console` or the MinIO console from outside.
 
 ## Standing constraints carried throughout
 

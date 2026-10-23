@@ -5,10 +5,10 @@
 | What | Login / value | Where the secret lives |
 |------|---------------|------------------------|
 | Super-admin console `/console` | `ops@mgvlabs.com` | `GoTrue.GOTRUE_ADMIN_PASSWORD` |
-| Member-management UI (`admin-ui`) | password only | `admin-ui.ADMIN_PASSWORD` = `mgv-team-2026` |
-| MinIO console `/minio/` | `minioadmin` | `MinIO.MINIO_ROOT_PASSWORD` |
+| Member-management UI (`admin-ui`) | password only | `admin-ui.ADMIN_PASSWORD` (read it in Railway; never write it here) |
+| MinIO root (no public console since 2026-10-23; use `railway ssh --service MinIO` + `mc`) | `MinIO.MINIO_ROOT_USER` | `MinIO.MINIO_ROOT_PASSWORD` (Cloud/Worker `APPFLOWY_S3_*` reference these) |
 | Postgres | — | `pgvector` service |
-| GoTrue JWT secret | — | `GoTrue.GOTRUE_JWT_SECRET` |
+| GoTrue JWT secret | — | `GoTrue.GOTRUE_JWT_SECRET` (Cloud, Worker, provisioner, admin-ui reference it) |
 | Brevo API key | — | `email-hook.BREVO_API_KEY` |
 
 ## `admin-ui` — member management (our service)
